@@ -10,8 +10,8 @@ REQUIRED PERL MODULES
 DBI
 DBD::SQLite2
 Time::CTime (Time-modules)
-Config::Ini
-Text::Glob
+Config::Tiny
+Text::Glob 0.08
 Digest::MD5
 Data::UUID
 

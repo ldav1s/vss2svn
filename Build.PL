@@ -17,6 +17,7 @@ Module::Build->new
 	  'Data::Dumper' => 0,
 	  'Data::UUID' => 0,
           'Text::Glob' => '>= 0.08',
+          'Config::Tiny' => '>= 2.10',
       },
       script_files => { 'script/vss2svn.pl' => 'script/vss2svn.pl', 'ssphys/ssphys' => 'bin/ssphys'},
       pm_files => { 'script/Vss2Svn/ActionHandler.pm' => 'lib/Vss2Svn/ActionHandler.pm',

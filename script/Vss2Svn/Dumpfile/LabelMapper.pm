@@ -2,7 +2,7 @@ package Vss2Svn::Dumpfile::LabelMapper;
 
 use warnings;
 use strict;
-use Config::Ini;
+use Config::Tiny;
 
 ###############################################################################
 #  new
@@ -10,10 +10,11 @@ use Config::Ini;
 sub new {
     my($class, $conf) = @_;
 
-    my $config = new Config::Ini( $conf, -commentdelim => "#" );
+    my $config = new Config::Tiny();
+    $config = Config::Tiny->read($conf);
     my $self = ();
 
-    $self->{labels} = $config->get (['labels']);
+    $self->{labels} = $config->{'labels'};
    
     $self = bless($self, $class);
     return $self;
