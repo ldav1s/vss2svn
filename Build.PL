@@ -3,6 +3,8 @@ use Module::Build;
 Module::Build->new
     ( dist_name => 'Vss2Svn',
       dist_version_from => 'script/vss2svn.pl',
+      configure_requires => {'Module::Build' => 0.38},
+      dist_abstract => 'converts SourceSafe database to subversion repository',
       license => 'gpl',
       requires => {
 	  'Getopt::Long' => '>= 2.34',
@@ -13,6 +15,8 @@ Module::Build->new
 	  'File::Path' => 0,
 	  'Time::CTime' => 0,
 	  'Data::Dumper' => 0,
+	  'Data::UUID' => 0,
+          'Text::Glob' => '>= 0.08',
       },
       script_files => { 'script/vss2svn.pl' => 'script/vss2svn.pl', 'ssphys/ssphys' => 'bin/ssphys'},
       pm_files => { 'script/Vss2Svn/ActionHandler.pm' => 'lib/Vss2Svn/ActionHandler.pm',
