@@ -86,4 +86,6 @@ AC_CHECK_LIB(boost_program_options, main,, [
 	AC_MSG_ERROR([You need the C++ boost Program Options library (1.32 or later).])])
 AC_CHECK_LIB(boost_filesystem, main,, [
 	AC_MSG_ERROR([You need the C++ boost filesystem library.])])
+AC_CHECK_LIB(boost_system, main,, [
+	AC_MSG_ERROR([You need the C++ boost filesystem library.])])
 AC_OUTPUT([Makefile])

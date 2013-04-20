@@ -160,12 +160,12 @@ void SSItemInfoObject::ToXml (XMLNode* pParent) const
 std::string SSItemInfoObject::GetDataFileName () const
 {
   std::string fileName = GetFile ()->GetFileName () + GetLatestExt ();
-  boost::filesystem::path fpath(fileName, boost::filesystem::native);
+  boost::filesystem::path fpath(fileName);
 
   if (!boost::filesystem::exists(fpath) && fpath.has_leaf() && fpath.has_branch_path())
   {
-    std::string lcLeaf = fpath.leaf();
-    std::string ucLeaf = fpath.leaf();
+     std::string lcLeaf = fpath.leaf().string();
+     std::string ucLeaf = fpath.leaf().string();
     for (int i = 0; i < lcLeaf.length(); ++i) {
 	lcLeaf[i] = tolower(lcLeaf[i]);
 	ucLeaf[i] = toupper(ucLeaf[i]);
