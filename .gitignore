@@ -1,9 +1,11 @@
 # Object files
 *.o
+*.lo
 
 # Libraries
 *.lib
 *.a
+*.la
 
 # Shared objects (inc. Windows DLLs)
 *.dll
@@ -16,3 +18,29 @@
 *.out
 *.app
 
+# Backups
+*~
+
+# Perl
+Build
+MANIFEST
+MANIFEST.SKIP.bak
+MYMETA.json
+MYMETA.yml
+_build/
+blib/
+
+# autotools
+ssphys/.deps/
+ssphys/autom4te.cache/
+ssphys/config/
+ssphys/Makefile
+ssphys/Makefile.in
+ssphys/aclocal.m4
+ssphys/config.log
+ssphys/config.status
+ssphys/configure
+ssphys/libtool
+ssphys/ssphys
+ssphys/svnwcrev.sh
+ssphys/version.h
