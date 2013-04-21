@@ -1907,6 +1907,17 @@ EOSQL
     $sth = $gCfg{dbh}->prepare($sql);
     $sth->execute;
 
+    $sql = <<"EOSQL";
+CREATE TABLE GitAction (
+    git_id    INTEGER PRIMARY KEY,
+    action_id INTEGER REFERENCES PhysicalAction ( action_id ) ON DELETE CASCADE,
+    hash      VARCHAR
+    );
+EOSQL
+
+    $sth = $gCfg{dbh}->prepare($sql);
+    $sth->execute;
+
     my @cfgitems = qw(task step vssdir svnurl svnuser svnpwd ssphys tempdir
         setsvndate starttime);
 
