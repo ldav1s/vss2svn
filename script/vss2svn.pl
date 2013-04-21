@@ -165,29 +165,28 @@ sub FindPhysDbFiles {
 
     my $cache = Vss2Svn::DataCache->new('Physical')
         || &ThrowError("Could not create cache 'Physical'");
+    my $vssdb_cnt = 0;
+    my $vssfile_depth = 2;
 
-    find(sub{ &FoundSsFile($cache) }, $gCfg{vssdatadir});
+    find({
+            preprocess => sub {
+                my $depth = $File::Find::dir =~ tr[/][];
+                return sort grep { -d $_ && $_ =~ m:^[a-z]{1}$:i } @_ if $depth < $vssfile_depth;
+                return sort grep { -f $_ && $_ =~ m:^[a-z]{8}$:i } @_ if $depth == $vssfile_depth;
+            },
+            wanted => sub {
+                my $depth = $File::Find::dir =~ tr[/][];
+                return if $depth != $vssfile_depth;
+                $cache->add(uc($_));
+                ++$vssdb_cnt;
+            },
+         }, $gCfg{vssdatadir});
+
+    print "Found $vssdb_cnt VSS database files at '$gCfg{vssdatadir}'\n" if $gCfg{verbose};
 
     $cache->commit();
 
 }  #  End FindPhysDbFiles
-
-###############################################################################
-#  FoundSsFile
-###############################################################################
-sub FoundSsFile {
-    my($cache) = @_;
-
-    my $path = $File::Find::name;
-    return if (-d $path);
-
-    my $vssdatadir = quotemeta($gCfg{vssdatadir});
-
-    if ($path =~ m:^$vssdatadir/./([a-z]{8})$:i) {
-        $cache->add(uc($1));
-    }
-
-}  #  End FoundSsFile
 
 ###############################################################################
 #  GetPhysVssHistory
