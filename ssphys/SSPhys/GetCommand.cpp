@@ -222,14 +222,14 @@ public:
       case 1:
         {
           char b[256];
-          long size = pfd->end;
+          long32 size = pfd->end;
           input.seekg(pfd->start);
           if (input.fail ())
             throw SSException ("reverse delta: invalid seek beyond file size");
 
           while (size > 0 && !input.fail () && !output.fail ())
           {
-            long s = std::min (size, (long) sizeof (b));
+            long32 s = std::min (size, (long32) sizeof (b));
             input.read (b, s);
             output.write (b, s);
             
@@ -246,7 +246,7 @@ public:
         break;
       case 0:
         {
-	    long s = std::min (pfd->end, (ulong)(m_length - i));
+          long32 s = std::min (pfd->end, (ulong32)(m_length - i));
           output.write (m_pBuffer+i, s);
 
           if (s < pfd->end)

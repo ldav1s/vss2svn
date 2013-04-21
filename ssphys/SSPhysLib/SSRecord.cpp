@@ -80,7 +80,7 @@ eType SSRecord::GetType () const
   return SSRecord::StringToType (m_Header.type);
 }
 
-SSRecord::SSRecord (SSFileImpPtr filePtr, long offset)
+SSRecord::SSRecord (SSFileImpPtr filePtr, long32 offset)
   : m_FileImpPtr (filePtr), m_Offset(offset), m_pBuffer(NULL), m_Len (0)
 {
   int fileLength = m_FileImpPtr->Size ();

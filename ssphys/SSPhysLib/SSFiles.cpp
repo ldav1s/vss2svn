@@ -47,7 +47,7 @@ SSFileImp::~SSFileImp ()
 
   delete m_pInput; m_pInput = NULL;
 
-//  std::map <long, SSRecordPtr>::iterator itor = m_Records.begin ();
+//  std::map <long32, SSRecordPtr>::iterator itor = m_Records.begin ();
 //  for (; itor != m_Records.end (); ++itor)
 //  {
 //    if ((*itor).second.use_count () != 1)
@@ -57,7 +57,7 @@ SSFileImp::~SSFileImp ()
 //  m_Records.empty ();
 }
 
-long SSFileImp::Size ()
+long32 SSFileImp::Size ()
 {
   assert (m_pInput);
   m_pInput->seekg(0, std::ios_base::end);
@@ -75,7 +75,7 @@ bool SSFileImp::Read (void* ptr, size_t size)
   return m_pInput->gcount () == size;
 }
 
-bool SSFileImp::Read (long offset, void* ptr, size_t len)
+bool SSFileImp::Read (long32 offset, void* ptr, size_t len)
 {
 //  bool bClose = true; // !IsOpen ();
 //  if (bClose && !Open ("rb"))
@@ -109,13 +109,13 @@ bool SSFileImp::Seek (size_t offset, std::ios_base::seekdir way)
 //  return m_pInput->Write (ptr, size, count);
 //}
 
-SSRecordPtr SSFileImp::GetRecord (long offset)
+SSRecordPtr SSFileImp::GetRecord (long32 offset)
 {
   if (offset >= Size ())
     throw SSException ("could not read record at offset behind file size");
 
   SSRecordPtr recordPtr;
-//  std::map <long, SSRecordPtr >::iterator itor = m_Records.find (offset);
+//  std::map <long32, SSRecordPtr >::iterator itor = m_Records.find (offset);
 //  if (itor == m_Records.end())
 //  {
     recordPtr.reset (ReadRecord (offset));
@@ -129,7 +129,7 @@ SSRecordPtr SSFileImp::GetRecord (long offset)
   return recordPtr;
 }
 
-SSRecord* SSFileImp::ReadRecord (long offset)
+SSRecord* SSFileImp::ReadRecord (long32 offset)
 {
   return new SSRecord (shared_from_this(), offset);
 }
@@ -251,7 +251,7 @@ SSRecordPtr SSRecordFile::FindNextRecord (SSRecordPtr pRecord)
   SSRecordPtr pNext;
   if (pRecord && pRecord->IsValid ())
   {
-    long offset = pRecord->GetNextOffset ();
+    long32 offset = pRecord->GetNextOffset ();
     while (!pNext && offset < m_FileImpPtr->Size () - sizeof (RECORD_HEADER))
     {
       try{
@@ -266,7 +266,7 @@ SSRecordPtr SSRecordFile::FindNextRecord (SSRecordPtr pRecord)
   return pNext;
 }
 
-SSRecordPtr SSRecordFile::GetRecord (long offset)
+SSRecordPtr SSRecordFile::GetRecord (long32 offset)
 {
   assert (m_FileImpPtr);
   return m_FileImpPtr->GetRecord (offset);
@@ -298,7 +298,7 @@ SSHeaderFile::SSHeaderFile (const std::string& fileName)
 {
 }
 
-long SSHeaderFile::GetHeaderLength ()
+long32 SSHeaderFile::GetHeaderLength ()
 {
   return (sizeof (m_Header));
 }
@@ -319,7 +319,7 @@ SSPlainFile::SSPlainFile (std::istream* pInput)
 {
 }
 
-long SSPlainFile::GetHeaderLength ()
+long32 SSPlainFile::GetHeaderLength ()
 {
   return (0);
 }

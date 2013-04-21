@@ -33,9 +33,9 @@ public:
   short       GetNumberOfActions ()     const { return GetData()->numberOfActions; }
   SSName      GetSSName ()              const { return GetData()->name; }
   std::string GetLatestExt ()           const { return std::string (GetData()->latestExt, 2); }
-  ulong       GetHistoryOffsetBegin ()  const { return GetData()->historyOffsetBegin; }
-  ulong       GetHistoryOffsetLast ()   const { return GetData()->historyOffsetLast; }
-  ulong       GetHistoryOffsetEnd ()    const { return GetData()->historyOffsetEnd; }
+  ulong32     GetHistoryOffsetBegin ()  const { return GetData()->historyOffsetBegin; }
+  ulong32     GetHistoryOffsetLast ()   const { return GetData()->historyOffsetLast; }
+  ulong32     GetHistoryOffsetEnd ()    const { return GetData()->historyOffsetEnd; }
 
   // return the last known name of the item
   std::string GetName ()                const { SSName name (GetSSName ()); return name.GetFullName(); }
@@ -104,12 +104,12 @@ public:
   // accessors
   short       GetFlag ()                  const { return GetData ()->flag; }
   std::string GetShareSrcPhys ()          const { return GetData ()->shareSrcSpec; }
-  ulong       GetOffsetBFRecord ()        const { return GetData ()->offsetBFRecord; }
-  ulong       GetOffsetPFRecord ()        const { return GetData ()->offsetPFRecord; }
+  ulong32     GetOffsetBFRecord ()        const { return GetData ()->offsetBFRecord; }
+  ulong32     GetOffsetPFRecord ()        const { return GetData ()->offsetPFRecord; }
   short       GetNumberOfBranches ()      const { return GetData ()->numberOfBranches; }
   short       GetNumberOfReferences ()    const { return GetData ()->numberOfReferences; }
-  ulong       GetOffsetCFRecord1()        const { return GetData ()->offsetCFRecord1; }
-  ulong       GetOffsetCFRecord2()        const { return GetData ()->offsetCFRecord2; }
+  ulong32     GetOffsetCFRecord1()        const { return GetData ()->offsetCFRecord1; }
+  ulong32     GetOffsetCFRecord2()        const { return GetData ()->offsetCFRecord2; }
 //  short       GetNumberOfItems()          const { return GetData ()->numberOfItems; }
 //  short       GetNumberOfProjects()       const { return GetData ()->numberOfProjects; }
 

@@ -120,7 +120,7 @@ bool SSItemInfoObject::Validate()
   retval &= warn_if (filePtr->GetRecord (GetHistoryOffsetBegin ())->GetType() != eHistoryRecord);
 
   int nCount = 0;
-  long offset = GetHistoryOffsetLast ();
+  long32 offset = GetHistoryOffsetLast ();
   eAction lastActionId = Labeled;
 
   do {

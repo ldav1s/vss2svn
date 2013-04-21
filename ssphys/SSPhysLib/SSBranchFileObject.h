@@ -17,7 +17,7 @@ public:
 	SSBranchFileObject(SSRecordPtr pRecord);
 	virtual ~SSBranchFileObject();
 
-  ulong       GetPreviousOffset ()  const { return GetData ()->previousOffset; }
+  ulong32     GetPreviousOffset ()  const { return GetData ()->previousOffset; }
   std::string GetBranchToPhys ()    const { return GetData ()->branchToPhys; }
 
   SSBranchFileObject* GetPrevious ();

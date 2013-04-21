@@ -58,7 +58,7 @@ public:
     m_pFile = pFile;
   }
 
-  std::string GetName (short flag, long offset, int cp=0)
+  std::string GetName (short flag, long32 offset, int cp=0)
   {
     if (!m_pFile)
       return "";

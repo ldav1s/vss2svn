@@ -12,13 +12,17 @@
 #include "time.h"
 
 typedef unsigned char byte;
-typedef unsigned long ulong;
 typedef unsigned short ushort;
 
 #if !defined(_MSC_VER)
 // for non-Windows compilation, choose a 32-bit unsigned type here
 #include <sys/types.h>
 typedef u_int32_t __time32_t;
+typedef int32_t   long32;
+typedef u_int32_t ulong32;
+#else
+typedef long          long32;
+typedef unsigned long ulong32;
 #endif
 
 //---------------------------------------------------------------------------
@@ -27,7 +31,7 @@ typedef u_int32_t __time32_t;
 //---------------------------------------------------------------------------
 
 struct RECORD_HEADER {
-  ulong   size;  
+  ulong32 size;
   char    type[2];
   short   checksum;
 };
@@ -35,7 +39,7 @@ struct RECORD_HEADER {
 struct SSNAME {
   short   flags;		  // 00 = item, 01 == project
   char    name[34];    // short name
-  ulong   nsmap;      // offset into the names.dat
+  ulong32 nsmap;      // offset into the names.dat
 
 };
 
@@ -61,9 +65,9 @@ struct DH {
   char    latestExt[2]; // .A or .B
 
   // offsets for records
-  ulong   historyOffsetBegin;  // first EL Header
-  ulong   historyOffsetLast;   // last EL oder FD HEader
-  ulong   historyOffsetEnd;    // size of the file
+  ulong32 historyOffsetBegin;  // first EL Header
+  ulong32 historyOffsetLast;   // last EL oder FD HEader
+  ulong32 historyOffsetEnd;    // size of the file
 };
 
 struct DH_FILE : public DH {
@@ -78,13 +82,13 @@ struct DH_FILE : public DH {
   short   flag; 
   char    shareSrcSpec[10];
 
-  ulong   offsetBFRecord;       // offset to the last BR record in the file
-  ulong   offsetPFRecord;	      // offset to the last PF record in the file
+  ulong32 offsetBFRecord;       // offset to the last BR record in the file
+  ulong32 offsetPFRecord;	      // offset to the last PF record in the file
   short   numberOfBranches;	    // number of the BF records
   short   numberOfReferences;	  // Reference count for the item
 
-  ulong   offsetCFRecord1;  // file checked out, ptr to CF record
-  ulong   offsetCFRecord2;  // file not checked out, ptr to CF record
+  ulong32 offsetCFRecord1;  // file checked out, ptr to CF record
+  ulong32 offsetCFRecord2;  // file not checked out, ptr to CF record
   int     unknown;	        // changes after checkin
 
   char    dummy5[8];
@@ -164,7 +168,7 @@ enum eAction {
 };
 
 struct VERSION_RECORD {
-  ulong   previous;	    // previous VERSION_RECORD
+  ulong32 previous;	    // previous VERSION_RECORD
   ushort  actionID;     // eAction action;
   short   versionNumber;
   __time32_t  date;
@@ -174,12 +178,12 @@ struct VERSION_RECORD {
   
   // This seems to be always be a pointer to the next record 
   // If (lengthComment != 0) this next record is the comment record
-  ulong   offsetToNextRecordOrComment;
+  ulong32 offsetToNextRecordOrComment;
 
   // This offset seems to be NULL in most cases
   // In case of a LabelAction this is the offset to the so called LabelComment Record
   // In addition the lengthLabelComment is > 0
-  ulong   offsetToLabelComment;
+  ulong32 offsetToLabelComment;
 
   // Length of the comment strings
   short   lengthComment;
@@ -271,8 +275,8 @@ struct MOVED_PROJECT_ACTION {
 //} ;
 
 struct CHECKED_IN_ACTION {
-  ulong   offsetFileDelta;
-  long    padding;
+  ulong32 offsetFileDelta;
+  long32  padding;
   char    checkInSpec[260];
 };
 
@@ -340,18 +344,18 @@ struct CF {
 struct FD {
   short   command; // 01 copy, 00 replace, 02
   short   dummy;
-  ulong   start;
-  ulong   end;
+  ulong32 start;
+  ulong32 end;
 } ;
 
 struct PF {
-  ulong   previousOffset;
+  ulong32 previousOffset;
   char    parentPhys[10];
   short   padding;
 } ;
 
 struct BF {
-  ulong   previousOffset;
+  ulong32 previousOffset;
   char    branchToPhys[10];
   short   padding;
 } ;
@@ -373,11 +377,11 @@ struct PROJECT_ENTRY{
 
 //---------------------------------------------------------------------------
 struct HN {
-  ulong   size;  
+  ulong32 size;
   char    type[2];
   short   checksum;
   char    unknown1[16];
-  ulong   fileLen;
+  ulong32 fileLen;
   char    unknown2[60];
 };
 

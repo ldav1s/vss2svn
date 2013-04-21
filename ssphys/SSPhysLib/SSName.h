@@ -19,7 +19,7 @@ public:
 	virtual ~SSName();
 
   std::string GetFullName () const;
-  long GetOffset () const;
+  long32 GetOffset () const;
   std::string GetType () const;
 
   void ToXml (XMLNode* pParent, std::string name = "SSName");

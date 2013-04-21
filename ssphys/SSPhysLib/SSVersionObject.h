@@ -105,15 +105,15 @@ public:
   SSVersionObject& operator= (SSVersionObject const & object);
 
 //  BOOST_PP_SEQ_FOR_EACH(DEFINE_ACCESSORS, GetData(), VERSION_RECORD_SEQ);
-  ulong   GetPrevious ()                    const { return GetData ()->previous; }
+  ulong32 GetPrevious ()                    const { return GetData ()->previous; }
   eAction  GetActionID  ()                  const { return static_cast <eAction> (GetAction ()->GetActionID ()); }
   short   GetVersionNumber ()               const { return GetData ()->versionNumber; }
   // note the implicit conversion here from Win32 __time32_t to portable time_t
   time_t  GetDate ()                        const { return GetData ()->date; }
   std::string GetUsername ()                const { return std::string (GetData ()->username /*, 32*/); }
   std::string GetLabel ()                   const { return std::string (GetData ()->label    /*, 32*/); }
-  ulong   GetOffsetToNextRecordOrComment () const { return GetData ()->offsetToNextRecordOrComment; }
-  ulong   GetOffsetToLabelComment ()        const { return GetData ()->offsetToLabelComment; }
+  ulong32 GetOffsetToNextRecordOrComment () const { return GetData ()->offsetToNextRecordOrComment; }
+  ulong32 GetOffsetToLabelComment ()        const { return GetData ()->offsetToLabelComment; }
   short   GetLengthComment ()               const { return GetData ()->lengthComment; }
   short   GetLengthLabelComment ()          const { return GetData ()->lengthLabelComment; }
 
@@ -513,7 +513,7 @@ public:
   ~SSCheckedInAction ();
 
   std::string GetFileSepc () const    { return m_Action.checkInSpec; }
-  long GetOffset () const             { return m_Action.offsetFileDelta; }
+  long32 GetOffset () const           { return m_Action.offsetFileDelta; }
   SSRecordPtr GetFileDelta () const;
 
   virtual std::string FormatActionString ();
