@@ -18,6 +18,7 @@ use Vss2Svn::ActionHandler;
 use Vss2Svn::DataCache;
 use Vss2Svn::SvnRevHandler;
 use Vss2Svn::Dumpfile;
+use POSIX;
 
 require Encode;
 
@@ -100,7 +101,7 @@ sub RunConversion {
         $info = $joblist{ $gCfg{task} }
             or die "FATAL ERROR: Unknown task '$gCfg{task}'\n";
 
-        print "TASK: $gCfg{task}\n";
+        print "TASK: $gCfg{task}: " . POSIX::strftime("%Y-%m-%dT%H:%M:%S\n", localtime) . "\n";
         push @{ $gCfg{tasks} }, $gCfg{task};
 
         if ($gCfg{prompt}) {
@@ -1347,6 +1348,7 @@ VSS2SVN ver  : $VERSION
 SSPHYS exe   : $gCfg{ssphys}
 SSPHYS ver   : $ssversion
 XML Parser   : $gCfg{xmlParser}
+Task         : $gCfg{task}
 
 EOTXT
 
