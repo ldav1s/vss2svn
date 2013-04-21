@@ -11,6 +11,9 @@ AC_PROG_LIBTOOL
 # add an install target to Makefile
 AC_PROG_INSTALL
 
+# It's not 1999 anymore, already
+AC_DEFINE([TIXML_USE_STL])
+
 # we need some subversion tools if this is a working copy
 AC_ARG_VAR([SVNWCREV], [tool for incorporating subversion information into source])
 AC_ARG_VAR([SVN], [subversion commandline client])
