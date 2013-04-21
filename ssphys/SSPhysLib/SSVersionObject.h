@@ -513,7 +513,7 @@ public:
   ~SSCheckedInAction ();
 
   std::string GetFileSepc () const    { return m_Action.checkInSpec; }
-  long32 GetOffset () const           { return m_Action.offsetFileDelta; }
+  off_t GetOffset () const             { return m_Action.offsetFileDelta; }
   SSRecordPtr GetFileDelta () const;
 
   virtual std::string FormatActionString ();

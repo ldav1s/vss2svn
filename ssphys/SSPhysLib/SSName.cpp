@@ -25,7 +25,7 @@ SSName::~SSName()
 }
 
 //---------------------------------------------------------------------------
-long32 SSName::GetOffset () const
+off_t SSName::GetOffset () const
 {
   return m_ssName.nsmap;
 }

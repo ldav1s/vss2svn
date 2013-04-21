@@ -28,17 +28,17 @@ public:
   virtual ~SSFileImp ();
 
   bool Seek (size_t offset, std::ios_base::seekdir way);
-  bool Read (long32 offset, void* ptr, size_t size);
+  bool Read (off_t offset, void* ptr, size_t size);
   bool Read (void* ptr, size_t size);
 //  size_t Write (const void* ptr, size_t size, size_t count);
-  long32 Size ();
+  off_t Size ();
 
   std::string GetFileName () const;
 
-  SSRecordPtr GetRecord (long32 offset);
+  SSRecordPtr GetRecord (off_t offset);
 
 protected:
-  SSRecord* ReadRecord (long32 offset);
+  SSRecord* ReadRecord (off_t offset);
 //  friend SSRecord;
 //  void ReleaseRecord (SSRecord* record);
 
@@ -85,9 +85,9 @@ public:
   static SSRecordFile* MakeFile (const std::string& fileName);
   
   virtual bool CheckHeader ()   { return true; }
-  virtual long32 GetHeaderLength () = 0;
+  virtual off_t GetHeaderLength () = 0;
   
-  SSRecordPtr GetRecord (long32 offset);
+  SSRecordPtr GetRecord (off_t offset);
   SSRecordPtr GetFirstRecord ();
   SSRecordPtr GetNextRecord (SSRecordPtr pRecord);
   SSRecordPtr FindNextRecord (SSRecordPtr pRecord);
@@ -102,7 +102,7 @@ class SSHeaderFile : public SSRecordFile
 public:
   SSHeaderFile (const std::string& fileName);
 
-  virtual long32 GetHeaderLength ();
+  virtual off_t GetHeaderLength ();
 
   virtual void Dump (std::ostream& os);
 
@@ -116,7 +116,7 @@ public:
   SSPlainFile (const std::string& fileName);
   SSPlainFile (std::istream* pInput);
 
-  virtual long32 GetHeaderLength ();
+  virtual off_t GetHeaderLength ();
 
   SSItemInfoObject* GetItemInfo ();
   virtual void Dump (std::ostream& os);

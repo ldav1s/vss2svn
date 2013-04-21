@@ -68,7 +68,7 @@ public:
 
   SSFileImpPtr GetFile ()  const { return m_pRecord->GetFileImp (); }
   eType GetType ()         const { return m_pRecord->GetType (); }
-  long32 GetOffset ()      const { return m_pRecord->GetOffset(); }
+  off_t GetOffset ()        const { return m_pRecord->GetOffset(); }
 
   const byte* GetData ()   const { return m_pRecord->GetBuffer (); }
 

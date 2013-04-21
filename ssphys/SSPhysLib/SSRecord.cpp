@@ -80,18 +80,22 @@ eType SSRecord::GetType () const
   return SSRecord::StringToType (m_Header.type);
 }
 
-SSRecord::SSRecord (SSFileImpPtr filePtr, long32 offset)
+SSRecord::SSRecord (SSFileImpPtr filePtr, off_t offset)
   : m_FileImpPtr (filePtr), m_Offset(offset), m_pBuffer(NULL), m_Len (0)
 {
-  int fileLength = m_FileImpPtr->Size ();
+  off_t fileLength = m_FileImpPtr->Size ();
 
   if (!m_FileImpPtr->Read (offset, &m_Header, sizeof(m_Header)))
     throw SSException ("could not read record header");
 
+  // early check for type.
+  if(SSRecord::StringToType (m_Header.type) == eUnknown)
+    throw SSRecordException ("unknown type");
+
   // OPTIMIZE: We do not nead to read all the record payload in advance (esp. for FD records)
   if (m_Header.size > 0)
   {
-    if (offset + sizeof(m_Header) + m_Header.size > fileLength)
+    if (offset + sizeof(m_Header) + m_Header.size > fileLength/* || m_Header.size > 100 * 1024 * 1024*/)
       throw SSRecordException ("bad header: length variable exceeds file size");
 
     m_pBuffer = new byte[m_Header.size];
@@ -110,7 +114,7 @@ SSRecord::SSRecord (SSFileImpPtr filePtr, long32 offset)
   m_Len = m_Header.size;
 }
 
-SSRecord::SSRecord (eType type, const void* buffer, int len)
+SSRecord::SSRecord (eType type, const void* buffer, off_t len)
   : m_Offset(0), m_pBuffer(NULL), m_Len (0)
 {
   m_Header.checksum = calc_crc16 (buffer, len);

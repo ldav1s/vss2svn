@@ -57,7 +57,7 @@ SSFileImp::~SSFileImp ()
 //  m_Records.empty ();
 }
 
-long32 SSFileImp::Size ()
+off_t SSFileImp::Size ()
 {
   assert (m_pInput);
   m_pInput->seekg(0, std::ios_base::end);
@@ -75,7 +75,7 @@ bool SSFileImp::Read (void* ptr, size_t size)
   return m_pInput->gcount () == size;
 }
 
-bool SSFileImp::Read (long32 offset, void* ptr, size_t len)
+bool SSFileImp::Read (off_t offset, void* ptr, size_t len)
 {
 //  bool bClose = true; // !IsOpen ();
 //  if (bClose && !Open ("rb"))
@@ -109,7 +109,7 @@ bool SSFileImp::Seek (size_t offset, std::ios_base::seekdir way)
 //  return m_pInput->Write (ptr, size, count);
 //}
 
-SSRecordPtr SSFileImp::GetRecord (long32 offset)
+SSRecordPtr SSFileImp::GetRecord (off_t offset)
 {
   if (offset >= Size ())
     throw SSException ("could not read record at offset behind file size");
@@ -129,7 +129,7 @@ SSRecordPtr SSFileImp::GetRecord (long32 offset)
   return recordPtr;
 }
 
-SSRecord* SSFileImp::ReadRecord (long32 offset)
+SSRecord* SSFileImp::ReadRecord (off_t offset)
 {
   return new SSRecord (shared_from_this(), offset);
 }
@@ -251,7 +251,7 @@ SSRecordPtr SSRecordFile::FindNextRecord (SSRecordPtr pRecord)
   SSRecordPtr pNext;
   if (pRecord && pRecord->IsValid ())
   {
-    long32 offset = pRecord->GetNextOffset ();
+    off_t offset = pRecord->GetNextOffset ();
     while (!pNext && offset < m_FileImpPtr->Size () - sizeof (RECORD_HEADER))
     {
       try{
@@ -266,7 +266,7 @@ SSRecordPtr SSRecordFile::FindNextRecord (SSRecordPtr pRecord)
   return pNext;
 }
 
-SSRecordPtr SSRecordFile::GetRecord (long32 offset)
+SSRecordPtr SSRecordFile::GetRecord (off_t offset)
 {
   assert (m_FileImpPtr);
   return m_FileImpPtr->GetRecord (offset);
@@ -298,7 +298,7 @@ SSHeaderFile::SSHeaderFile (const std::string& fileName)
 {
 }
 
-long32 SSHeaderFile::GetHeaderLength ()
+off_t SSHeaderFile::GetHeaderLength ()
 {
   return (sizeof (m_Header));
 }
@@ -319,7 +319,7 @@ SSPlainFile::SSPlainFile (std::istream* pInput)
 {
 }
 
-long32 SSPlainFile::GetHeaderLength ()
+off_t SSPlainFile::GetHeaderLength ()
 {
   return (0);
 }

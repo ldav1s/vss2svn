@@ -34,9 +34,10 @@ enum eType {
 class SSRecord
 {
   friend class SSFileImp;
-  SSRecord (SSFileImpPtr filePtr, long32 offset);
+  SSRecord (SSFileImpPtr filePtr, off_t offset);
+
 public:
-  SSRecord (eType type, const void* buffer, int len);
+  SSRecord (eType type, const void* buffer, off_t len);
   ~SSRecord ();
 
   static eType        StringToType  (const char type[2]);
@@ -46,9 +47,9 @@ public:
 
   const byte* GetBuffer () const { return m_pBuffer; }
   byte* GetBuffer ()             { return m_pBuffer; }
-  int GetLen ()            const { return m_Len; }
-  long32 GetOffset ()      const { return m_Offset; }
-  long32 GetNextOffset ()  const { return m_Offset + m_Len + sizeof(m_Header); }
+  off_t GetLen ()            const { return m_Len; }
+  off_t GetOffset ()        const { return m_Offset; }
+  off_t GetNextOffset ()    const { return m_Offset + m_Len + sizeof(m_Header); }
   std::string GetRecordType () const { return std::string (m_Header.type, 2); }
   eType GetType () const;
 
@@ -59,8 +60,8 @@ public:
 private:
   RECORD_HEADER m_Header;
   byte* m_pBuffer;
-  int m_Len;
-  long32 m_Offset;
+  off_t m_Len;
+  off_t m_Offset;
   SSFileImpPtr m_FileImpPtr;
 };
 
