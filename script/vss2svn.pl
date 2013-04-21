@@ -192,7 +192,7 @@ sub FindPhysDbFiles {
 #  GetPhysVssHistory
 ###############################################################################
 sub GetPhysVssHistory {
-    my($sql, $sth, $row, $physname, $physdir);
+    my($sql, $sth, $row, $physname);
 
     &LoadNameLookup;
     my $cache = Vss2Svn::DataCache->new('PhysicalAction', 1)
@@ -207,10 +207,9 @@ sub GetPhysVssHistory {
     while (defined($row = $sth->fetchrow_hashref() )) {
         $physname = $row->{physname};
 
-        $physdir = "$gCfg{vssdir}/data";
         my $physfolder = substr($physname, 0, 1);
 
-        &GetVssPhysInfo($cache, $physdir, $physfolder, $physname, $xs);
+        &GetVssPhysInfo($cache, $gCfg{vssdatadir}, $physfolder, $physname, $xs);
     }
 
     $cache->commit();
