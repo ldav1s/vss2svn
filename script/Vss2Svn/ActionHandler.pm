@@ -3,6 +3,8 @@ package Vss2Svn::ActionHandler;
 use warnings;
 use strict;
 
+use constant VSSDB_ROOT => 'AAAAAAAA';
+
 our %gHandlers =
     (
      ADD        => \&_add_handler,
@@ -697,8 +699,8 @@ sub _get_parent_path {
         return '';
     }
     
-    if ($physname eq 'AAAAAAAA') {
-        # End of recursion; all items must go back to 'AAAAAAAA', which was so
+    if ($physname eq VSSDB_ROOT) {
+        # End of recursion; all items must go back to VSSDB_ROOT, which was so
         # named because that's what most VSS users yell after using it much. :-)
         return $self->{trunkdir} . '/';
     }
@@ -825,8 +827,8 @@ sub _get_item_paths {
         return undef;
     }
 
-    if ($physname eq 'AAAAAAAA') {
-        # End of recursion; all items must go back to 'AAAAAAAA', which was so
+    if ($physname eq VSSDB_ROOT) {
+        # End of recursion; all items must go back to VSSDB_ROOT, which was so
         # named because that's what most VSS users yell after using it much. :-)
         return [$self->{trunkdir} . '/'];
     }

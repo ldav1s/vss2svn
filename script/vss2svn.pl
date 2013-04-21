@@ -273,7 +273,7 @@ sub GetVssPhysInfo {
     }
 
     if ($iteminfo->{Type} == 1) {
-        $parentphys = (uc($physname) eq 'AAAAAAAA')?
+        $parentphys = (uc($physname) eq Vss2Svn::ActionHandler::VSSDB_ROOT)?
             '' : &GetProjectParent($xml);
     } elsif ($iteminfo->{Type} == 2) {
         $parentphys = undef;
@@ -388,7 +388,7 @@ VERSION:
             $comment =~ s/\s+$//s;
         }
 
-        if ($itemtype == 1 && uc($physname) eq 'AAAAAAAA'
+        if ($itemtype == 1 && uc($physname) eq Vss2Svn::ActionHandler::VSSDB_ROOT
             && ref($tphysname)) {
 
             $tphysname = $physname;
