@@ -384,6 +384,7 @@ VERSION:
         }
 
         if (defined($comment)) {
+            $comment =~ s/(?:\r\n|\r(?!\n))/\n/g;
             $comment =~ s/^\s+//s;
             $comment =~ s/\s+$//s;
         }
