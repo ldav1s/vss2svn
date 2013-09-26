@@ -6,7 +6,7 @@
 #include "SSTypes.h"
 
 //---------------------------------------------------------------------------
-extern const char* g_szActions[] = { 
+const char* const g_szActions[] = {
   "Labeled",            // = 0
   "Created Project",    // = 1
   "Added Project",      // = 2

@@ -116,7 +116,7 @@ std::string TypeToString (short type)
 {
   warn_if (type != 1 && type != 2);
 
-  char* types[2] = { "project", "file" };
+  const char* const types[2] = { "project", "file" };
   if (type == 1 || type == 2)
     return types[type-1];
 
