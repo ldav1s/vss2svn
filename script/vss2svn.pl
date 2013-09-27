@@ -192,7 +192,7 @@ sub FindPhysDbFiles {
 #  GetPhysVssHistory
 ###############################################################################
 sub GetPhysVssHistory {
-    my($sql, $sth, $row, $physname);
+    my($sql, $sth, $row, $physname, $datapath);
 
     &LoadNameLookup;
     my $cache = Vss2Svn::DataCache->new('PhysicalAction', 1)
@@ -206,10 +206,9 @@ sub GetPhysVssHistory {
 
     while (defined($row = $sth->fetchrow_hashref() )) {
         $physname = $row->{physname};
+        $datapath = $row->{datapath};
 
-        my $physfolder = substr($physname, 0, 1);
-
-        &GetVssPhysInfo($cache, $gCfg{vssdatadir}, $physfolder, $physname, $xs);
+        &GetVssPhysInfo($cache, $datapath, $physname, $xs);
     }
 
     $cache->commit();
@@ -244,21 +243,11 @@ sub FindPhysnameFile {
 #  GetVssPhysInfo
 ###############################################################################
 sub GetVssPhysInfo {
-    my($cache, $physdir, $physfolder, $physname, $xs) = @_;
+    my($cache, $datapath, $physname, $xs) = @_;
 
-    my @filesegment = &FindPhysnameFile($physdir, $physfolder, $physname);
+    print "datapath: \"$datapath\"\n" if $gCfg{debug};
 
-    print "physdir: \"$filesegment[0]\", physfolder: \"$filesegment[1]\" physname: \"$filesegment[2]\"\n" if $gCfg{debug};
-
-    if (!defined $filesegment[0] || !defined $filesegment[1]
-    || !defined $filesegment[2]) {
-        # physical file doesn't exist; it must have been destroyed later
-        &ThrowWarning("Can't retrieve info from physical file "
-                      . "'$physname'; it was either destroyed or corrupted");
-        return;
-    }
-
-    &DoSsCmd("info -e$gCfg{encoding} \"$filesegment[0]/$filesegment[1]/$filesegment[2]\"");
+    &DoSsCmd("info -e$gCfg{encoding} \"$datapath\"");
 
     my $xml = $xs->XMLin($gSysOut);
     my $parentphys;
