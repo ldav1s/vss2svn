@@ -177,7 +177,7 @@ sub FindPhysDbFiles {
             wanted => sub {
                 my $depth = $File::Find::dir =~ tr[/][];
                 return if $depth != $vssfile_depth;
-                $cache->add(uc($_));
+                $cache->add(uc($_), $File::Find::name);
                 ++$vssdb_cnt;
             },
          }, $gCfg{vssdatadir});
@@ -1766,7 +1766,8 @@ sub InitSysTables {
     $sql = <<"EOSQL";
 CREATE TABLE
     Physical (
-        physname    VARCHAR
+        physname    VARCHAR PRIMARY KEY,
+        datapath    VARCHAR
     )
 EOSQL
 
