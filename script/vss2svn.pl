@@ -216,30 +216,6 @@ sub GetPhysVssHistory {
 }  #  End GetPhysVssHistory
 
 ###############################################################################
-#  FindPhysnameFile
-###############################################################################
-sub FindPhysnameFile {
-    my($physdir, $physfolder, $physname) = @_;
-
-    # return it if we can find it without any alteration
-    return ($physdir, $physfolder, $physname) if -f "$physdir/$physfolder/$physname";
-    my $lcphysname = lc($physname);
-    my $lcphysfolder = lc($physfolder);
-
-    # try finding lowercase folder/filename
-    return ($physdir, $lcphysfolder, $lcphysname) if -f "$physdir/$lcphysfolder/$lcphysname";
-
-    # try finding lowercase folder/uppercase filename
-    return ($physdir, $lcphysfolder, $physname) if -f "$physdir/$lcphysfolder/$physname";
-
-    # haven't seen this one, but try it...
-    return ($physdir, $physfolder, $lcphysname) if -f "$physdir/$physfolder/$lcphysname";
-
-    # no idea what to return...
-    return (undef, undef, undef);
-}
-
-###############################################################################
 #  GetVssPhysInfo
 ###############################################################################
 sub GetVssPhysInfo {
@@ -1266,24 +1242,26 @@ ACTION:
 ###############################################################################
 sub ExportVssPhysFile {
     my($physname, $version) = @_;
+    my($row, $physpath);
 
-    $physname =~ m/^((.).)/;
+    $physname =~ m/^(..)/;
 
     my $exportdir = "$gCfg{vssdata}/$1";
-    my @filesegment = &FindPhysnameFile("$gCfg{vssdir}/data", $2, $physname);
+    $row = $gCfg{dbh}->selectrow_arrayref("SELECT datapath FROM Physical WHERE physname = ?", undef, $physname);
 
-    if (!defined $filesegment[0] || !defined $filesegment[1] || !defined $filesegment[2]) {
-        # physical file doesn't exist; it must have been destroyed later
+    if (!(defined $row && defined $row->[0])) {
+        # physical file doesn't exist; it must have been destroyed earlier
         &ThrowWarning("Can't retrieve revisions from physical file "
-                      . "'$physname'; it was either destroyed or corrupted");
+                      . "'$physname'; it was destroyed or was not in place before "
+                      . "the last GETPHYSHIST task was run.");
         return undef;
     }
-    my $physpath = "$filesegment[0]/$filesegment[1]/$filesegment[2]";
+    $physpath = $row->[0];
 
     if (! -f $physpath) {
-        # physical file doesn't exist; it must have been destroyed later
-        &ThrowWarning("Can't retrieve revisions from physical file "
-                      . "'$physname'; it was either destroyed or corrupted");
+        # physical file doesn't exist; it must have been destroyed later since find was run
+        &ThrowWarning("Can't retrieve revisions from VSS database file "
+                      . "'$physpath'; it was destroyed after the last GETPHYSHIST task was run.");
         return undef;
     }
 
