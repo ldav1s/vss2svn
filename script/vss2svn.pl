@@ -416,7 +416,7 @@ VERSION:
 
             $parentphys = $physname;
         } else {
-            $parentphys = undef;
+#            $parentphys = undef;
         }
 
         if ($itemtype == 1) {
@@ -440,7 +440,10 @@ VERSION:
             $info = $action->{Parent};
         }
 
-        $vernum = ($parentdata)? undef : $version->{VersionNumber};
+# Not having version info around, even if we don't have a parent is a mistake
+# I think.  Should have it in case this is later RESTOREd
+#        $vernum = ($parentdata)? undef : $version->{VersionNumber};
+        $vernum = $version->{VersionNumber};
 
         # since there is no corresponding client action for PIN, we need to
         # enter the concrete version number here manually
