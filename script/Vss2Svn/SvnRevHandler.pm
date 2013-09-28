@@ -64,7 +64,8 @@ sub check {
 
     # Any of the following cause a new SVN revision:
     #   * same file touched more than once
-    #   * different author or comment
+    #   * different author
+    #   * different comment
     #   * time range exceeds threshold num. of seconds (default 3600)
     #   * any action on a directory other than add
 
@@ -87,20 +88,28 @@ sub check {
     else {
         $self->{lastcommentaction} = $actiontype;
     }
+
+    # Destroyed files have the undef comment.
+    # We should check to make sure if this is the case.
+    if (!defined $comment) {
+        # toss out the offending comment
+        $comment = $prevcomment;
+    }
     
     no warnings 'uninitialized';
-    if(($author ne $prevauthor) || ($comment ne $prevcomment) || $wasseen ||
-       ($timestamp - $prevtimestamp > $gCfg{revtimerange}) ||
-       ($itemtype == 1 && $actiontype ne 'ADD') ||
-       $self->{commitPending} ) {
+    if($wasseen
+       || ($author ne $prevauthor)
+       || ($timestamp - $prevtimestamp > $gCfg{revtimerange})
+       || ($comment ne $prevcomment)
+       || ($itemtype == 1 && $actiontype ne 'ADD')
+       || $self->{commitPending} ) {
 
         $self->new_revision($data);
 
         if ($self->{verbose}) {
             print "\n**** NEW SVN REVISION ($self->{revnum}): ",
-                join(',', $physname, $timestamp, $author, $comment), "\n";
+            join(',', $physname, $timestamp, $author, $comment), "\n";
         }
-
     }
     
     # Any of the following actions needs to be commited the next time:
@@ -109,7 +118,7 @@ sub check {
     $self->{commitPending} = ($itemtype == 1 && $actiontype ne 'ADD') || ($self->{revnum} == 0);
     
     $self->{seen}->{$physname}++;
-    $self->{last_action}->{$physname} = $actiontype;;
+    $self->{last_action}->{$physname} = $actiontype;
 
     @{ $self }{qw( timestamp author comment actiontype)} =
         ($timestamp, $author, $comment, $actiontype);
