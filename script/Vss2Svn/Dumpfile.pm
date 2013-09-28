@@ -540,8 +540,8 @@ sub _recover_handler {
     }
     else {
         $copyrev =
-            $self->get_revision ($data->{physname}, $data->{version}, $data->{info});
-        $copypath = $data->{info};
+            $self->get_revision ($data->{physname}, $data->{version}, $data->{itempaths});
+        $copypath = $data->{itempaths};
     }
     
     if (!defined $copyrev || !defined $copypath) {
