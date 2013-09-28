@@ -9,6 +9,7 @@ use DBD::SQLite2;
 use XML::Simple;
 use File::Find;
 use File::Path;
+use File::Copy;
 use Time::CTime;
 use Data::Dumper;
 use Benchmark ':hireswallclock';
@@ -1247,16 +1248,34 @@ sub ExportVssPhysFile {
     $physname =~ m/^(..)/;
 
     my $exportdir = "$gCfg{vssdata}/$1";
+
+    mkpath($exportdir) if ! -e $exportdir;
     $row = $gCfg{dbh}->selectrow_arrayref("SELECT datapath FROM Physical WHERE physname = ?", undef, $physname);
 
     if (!(defined $row && defined $row->[0])) {
         # physical file doesn't exist; it must have been destroyed earlier
-        &ThrowWarning("Can't retrieve revisions from physical file "
-                      . "'$physname'; it was destroyed or was not in place before "
-                      . "the last GETPHYSHIST task was run.");
-        return undef;
+        # search and see if it was DESTROYed first
+        $row = $gCfg{dbh}->selectrow_arrayref("SELECT action_id FROM PhysicalAction "
+                                              . "WHERE physname = ? AND actiontype = 'DESTROY'",
+                                              undef, $physname);
+
+        if (!(defined $row && defined $row->[0])) {
+            # we have no idea if it was DESTROYed
+            &ThrowWarning("Can't retrieve revisions from physical file "
+                          . "'$physname'; it was possibly corrupted or was not in place before "
+                          . "the last GETPHYSHIST task was run.");
+            $version = 1;
+            $physpath = "$exportdir/$physname.$version";
+            copy("$gCfg{indeterminateFile}", $physpath);
+        } else {
+            # It was DESTROYed
+            $version = 1;
+            $physpath = "$exportdir/$physname.$version";
+            copy("$gCfg{destroyedFile}", $physpath);
+        }
+    } else {
+        $physpath = $row->[0];
     }
-    $physpath = $row->[0];
 
     if (! -f $physpath) {
         # physical file doesn't exist; it must have been destroyed later since find was run
@@ -1264,8 +1283,6 @@ sub ExportVssPhysFile {
                       . "'$physpath'; it was destroyed after the last GETPHYSHIST task was run.");
         return undef;
     }
-
-    mkpath($exportdir) if ! -e $exportdir;
 
     # MergeParentData normally will merge two corresponding item and parent
     # actions. But if the actions are more appart than the maximum allowed
@@ -1699,7 +1716,7 @@ sub SetupActionTypes {
         MovedProjectTo => {type => 1, action => 'MOVE_TO'},
         MovedProjectFrom => {type => 1, action => 'MOVE_FROM'},
         DeletedProject => {type => 1, action => 'DELETE'},
-        DestroyedProject => {type => 1, action => 'DELETE'},
+        DestroyedProject => {type => 1, action => 'DESTROY'},
         RecoveredProject => {type => 1, action => 'RECOVER'},
         ArchiveProject => {type => 1, action => 'DELETE'},
         RestoredProject => {type => 1, action => 'RESTORE'},
@@ -1708,7 +1725,7 @@ sub SetupActionTypes {
         AddedFile => {type => 2, action => 'ADD'},
         RenamedFile => {type => 2, action => 'RENAME'},
         DeletedFile => {type => 2, action => 'DELETE'},
-        DestroyedFile => {type => 2, action => 'DELETE'},
+        DestroyedFile => {type => 2, action => 'DESTROY'},
         RecoveredFile => {type => 2, action => 'RECOVER'},
         ArchiveVersionsofFile => {type => 2, action => 'ADD'},
     ArchiveVersionsofProject => {type => 1, action => 'ADD'},
@@ -2018,6 +2035,9 @@ sub Initialize {
 
     &ConfigureXmlParser();
 
+    $gCfg{destroyedFile} = "$gCfg{tempdir}/destroyed.txt";
+    $gCfg{indeterminateFile} = "$gCfg{tempdir}/indeterminate.txt";
+
     ### Don't go past here if resuming a previous run ###
     if ($gCfg{resume}) {
         return 1;
@@ -2025,6 +2045,8 @@ sub Initialize {
 
     rmtree($gCfg{vssdata}) if (-e $gCfg{vssdata});
     mkdir $gCfg{vssdata};
+
+    &WriteDestroyedPlaceholderFiles();
 
     $gCfg{ssphys} ||= 'ssphys';
     $gCfg{svn} ||= 'SVN.exe';
@@ -2147,3 +2169,23 @@ EOTXT
 
     exit(1);
 }  #  End GiveHelp
+
+###############################################################################
+#  WriteDestroyedPlaceholderFiles
+###############################################################################
+sub WriteDestroyedPlaceholderFiles {
+    open (DEST, ">>$gCfg{destroyedFile}");
+    print DEST <<"EOTXT";
+vss2svn2git has determined that this file has been destroyed in VSS history.
+vss2svn2git cannot retrieve it, since it no longer exists in the VSS database.
+EOTXT
+    close(DEST);
+
+    open (DEST, ">>$gCfg{indeterminateFile}");
+    print DEST <<"EOTXT";
+vss2svn2git cannot determine what has happened to this file.
+vss2svn2git was not able to retrieve it. This file was possibly lost
+due to corruption in the VSS database.
+EOTXT
+    close(DEST);
+}

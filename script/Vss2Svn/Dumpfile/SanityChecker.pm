@@ -289,7 +289,7 @@ sub _action_path_sanity_check {
             }
         }
 
-    } elsif ($action eq 'DELETE') {
+    } elsif ($action eq 'DELETE' || $action eq 'DESTROY') {
         $success = $self->_delete_svn_struct_item($itempath, $itemtype);
 
         if(!$success) {

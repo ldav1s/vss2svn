@@ -16,6 +16,7 @@ our %gHandlers =
      RESTORE    => \&_restore_handler,
      RESTOREDPROJECT    => \&_restore_handler,
      DELETE     => \&_delete_handler,
+     DESTROY     => \&_delete_handler,
      RECOVER    => \&_recover_handler,
      PIN        => \&_pin_handler,
      LABEL      => \&_label_handler,
