@@ -1100,8 +1100,8 @@ ROW:
             }
         }
 
-        # we need to check for the next rev number, after all pathes that can
-        # prematurally call the next row. Otherwise, we get an empty revision.
+        # we need to check for the next rev number, after all paths that can
+        # prematurely call the next row. Otherwise, we get an empty revision.
         $svnrevs->check($row);
 
         # May contain add'l info for the action depending on type:
