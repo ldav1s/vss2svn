@@ -48,6 +48,7 @@ sub _init {
     $self->{lastcommentaction} = undef;
     $self->{seen} = {};
     $self->{last_action} = {};
+    $self->{abs_last_action} = undef;
 
 }  #  End _init
 
@@ -71,6 +72,7 @@ sub check {
 
     my $wasseen = $self->{seen}->{$physname};
     my $last_action = $self->{last_action}->{$physname};
+    my $abs_last_action = $self->{abs_last_action};
 
     # in case the current action is the same as the last action
     if ($actiontype eq 'SHARE' && $wasseen && $last_action eq $actiontype) {
@@ -95,7 +97,14 @@ sub check {
         # toss out the offending comment
         $comment = $prevcomment;
     }
-    
+
+    # Isolate labels from other actions
+    if (defined $abs_last_action
+        && $abs_last_action eq 'LABEL'
+        && $actiontype ne 'LABEL') {
+        $self->{commitPending} = 1;
+    }
+
     no warnings 'uninitialized';
     if($wasseen
        || ($author ne $prevauthor)
@@ -119,6 +128,7 @@ sub check {
     
     $self->{seen}->{$physname}++;
     $self->{last_action}->{$physname} = $actiontype;
+    $self->{abs_last_action} = $actiontype;
 
     @{ $self }{qw( timestamp author comment actiontype)} =
         ($timestamp, $author, $comment, $actiontype);
@@ -136,6 +146,7 @@ sub new_revision {
     $self->{seen} = {};
     $self->{last_action} = {};
     $self->{commitPending} = undef;
+    $self->{abs_last_action} = undef;
 
 }  #  End new_revision
 
