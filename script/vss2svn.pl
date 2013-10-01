@@ -1191,7 +1191,6 @@ REVISION:
         $revision = $row->{revision_id};
         $dumpfile->begin_revision($row);
 
-#        next REVISION if $revision == 0;
 
         $action_sth->execute($revision);
         $actions = $action_sth->fetchall_arrayref( {} );
@@ -1201,23 +1200,21 @@ ACTION:
             $physname = $action->{physname};
             $itemtype = $action->{itemtype};
 
-#            if (!exists $exported{$physname}) {
-                my $version = $action->{version};
-                if (   !defined $version
-                    && (   $action->{action} eq 'ADD'
-                        || $action->{action} eq 'COMMIT')) {
-                    &ThrowWarning("'$physname': no version specified for retrieval");
+            my $version = $action->{version};
+            if (   !defined $version
+                   && (   $action->{action} eq 'ADD'
+                          || $action->{action} eq 'COMMIT')) {
+                &ThrowWarning("'$physname': no version specified for retrieval");
 
-                    # fall through and try with version 1.
-                    $version = 1;
-                }
+                # fall through and try with version 1.
+                $version = 1;
+            }
 
-                if ($itemtype == 2 && defined $version) {
-                    $exported{$physname} = &ExportVssPhysFile($physname, $version);
-                } else {
-                    $exported{$physname} = undef;
-                }
-#            }
+            if ($itemtype == 2 && defined $version) {
+                $exported{$physname} = &ExportVssPhysFile($physname, $version);
+            } else {
+                $exported{$physname} = undef;
+            }
 
             # do_action needs to know the revision_id, so paste it on
             $action->{revision_id} = $revision;
