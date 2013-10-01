@@ -28,6 +28,8 @@ our(%gCfg, %gSth, %gErr, %gFh, $gSysOut, %gActionType, %gNameLookup, %gId);
 our $VERSION = '0.11.0-nightly.$LastChangedRevision$';
 $VERSION =~ s/\$.*?(\d+).*\$/$1/; # get only the number out of the svn revision
 
+use constant ISO8601_FMT => "%Y-%m-%dT%H:%M:%S";
+
 &Initialize;
 &ConnectDatabase;
 
@@ -102,7 +104,7 @@ sub RunConversion {
         $info = $joblist{ $gCfg{task} }
             or die "FATAL ERROR: Unknown task '$gCfg{task}'\n";
 
-        print "TASK: $gCfg{task}: " . POSIX::strftime("%Y-%m-%dT%H:%M:%S\n", localtime) . "\n";
+        print "TASK: $gCfg{task}: " . POSIX::strftime(ISO8601_FMT . "\n", localtime) . "\n";
         push @{ $gCfg{tasks} }, $gCfg{task};
 
         if ($gCfg{prompt}) {
