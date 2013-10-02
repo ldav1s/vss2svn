@@ -107,7 +107,7 @@ sub check {
 
     no warnings 'uninitialized';
     if($wasseen
-       || ($author ne $prevauthor)
+       || (lc $author ne lc $prevauthor)
        || ($timestamp - $prevtimestamp > $gCfg{revtimerange})
        || ($comment ne $prevcomment)
        || ($itemtype == 1 && $actiontype ne 'ADD')
