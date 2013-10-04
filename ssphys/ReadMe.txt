@@ -134,12 +134,12 @@ for projects allows us to exactly specify the parent path specification.
 
 === Renames ===
 
-Renaming an item in VSS mainly done in tne parent project. There is a name 
+Renaming an item in VSS mainly done in the parent project. There is a name 
 variable in the item physical file that always carries the last name, but all 
 historic activities are recorded in the parent. 
 
 Sadly, the project structure is not recorded with FD records. As with files, the 
-last state is stored in a special file, but no reverse deltas exits. To get the 
+last state is stored in a special file, but no reverse deltas exists. To get the 
 correct names for older items, one have to reverse apply all actions beginning 
 from the last state.
 
