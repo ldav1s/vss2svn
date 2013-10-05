@@ -1238,6 +1238,52 @@ ACTION:
 }  #  End CreateSvnDumpfile
 
 ###############################################################################
+#  CheckForDestroy
+###############################################################################
+
+sub CheckForDestroy {
+    my($exportdir, $physname, $version, $destroyonly) = @_;
+    my($row, $physpath, $rowd);
+
+    # physical file doesn't exist; it must have been destroyed earlier
+    # search and see if it was DESTROYed first
+    $row = $gCfg{dbh}->selectrow_arrayref("SELECT action_id FROM PhysicalAction "
+                                          . "WHERE physname = ? AND "
+                                          . "actiontype = 'DESTROY'",
+                                          undef, $physname);
+
+    if (!$destroyonly) {
+        $rowd = $gCfg{dbh}->selectrow_arrayref("SELECT action_id FROM PhysicalAction "
+                                               . "WHERE physname = ? AND "
+                                               . "actiontype = 'DELETE'",
+                                               undef, $physname);
+    }
+
+    if (!(defined $row && defined $row->[0]) && !(defined $rowd && defined $rowd->[0])) {
+        # we have no idea if it was DESTROYed or DELETEd
+        &ThrowWarning("Can't retrieve revisions from physical file "
+                      . "'$physname'; it was possibly corrupted or was not in place before "
+                      . "the last GETPHYSHIST task was run.");
+
+        $physpath = "$exportdir/$physname.$version";
+        if (! -e $physpath) {
+            copy("$gCfg{indeterminateFile}", $physpath);
+        }
+    } else {
+        # It was DESTROYed or DELETEd
+        $physpath = "$exportdir/$physname.$version";
+        if (! -e $physpath) {
+            if (defined $row && defined $row->[0]) {
+                copy("$gCfg{destroyedFile}", $physpath);
+            } elsif (defined $rowd && defined $rowd->[0]) {
+                copy("$gCfg{deletedFile}", $physpath);
+            }
+        }
+    }
+    return $physpath;
+}
+
+###############################################################################
 #  ExportVssPhysFile
 ###############################################################################
 sub ExportVssPhysFile {
@@ -1252,26 +1298,10 @@ sub ExportVssPhysFile {
     $row = $gCfg{dbh}->selectrow_arrayref("SELECT datapath FROM Physical WHERE physname = ?", undef, $physname);
 
     if (!(defined $row && defined $row->[0])) {
-        # physical file doesn't exist; it must have been destroyed earlier
-        # search and see if it was DESTROYed first
-        $row = $gCfg{dbh}->selectrow_arrayref("SELECT action_id FROM PhysicalAction "
-                                              . "WHERE physname = ? AND actiontype = 'DESTROY'",
-                                              undef, $physname);
-
-        if (!(defined $row && defined $row->[0])) {
-            # we have no idea if it was DESTROYed
-            &ThrowWarning("Can't retrieve revisions from physical file "
-                          . "'$physname'; it was possibly corrupted or was not in place before "
-                          . "the last GETPHYSHIST task was run.");
+        if (! defined $version) {
             $version = 1;
-            $physpath = "$exportdir/$physname.$version";
-            copy("$gCfg{indeterminateFile}", $physpath);
-        } else {
-            # It was DESTROYed
-            $version = 1;
-            $physpath = "$exportdir/$physname.$version";
-            copy("$gCfg{destroyedFile}", $physpath);
         }
+        $physpath = &CheckForDestroy($exportdir, $physname, $version, 1);
     } else {
         $physpath = $row->[0];
     }
@@ -1296,7 +1326,12 @@ sub ExportVssPhysFile {
     }
 
     if (! -e "$exportdir/$physname.$version" ) {
+        # get all versions we can find from the physical file
         &DoSsCmd("get -b -v$version --force-overwrite -e$gCfg{encoding} \"$physpath\" $exportdir/$physname");
+
+        if (! -e "$exportdir/$physname.$version") {
+            $physpath = &CheckForDestroy($exportdir, $physname, $version, 0);
+        }
     }
 
     return $exportdir;
@@ -2035,6 +2070,7 @@ sub Initialize {
     &ConfigureXmlParser();
 
     $gCfg{destroyedFile} = "$gCfg{tempdir}/destroyed.txt";
+    $gCfg{deletedFile} = "$gCfg{tempdir}/deleted.txt";
     $gCfg{indeterminateFile} = "$gCfg{tempdir}/indeterminate.txt";
 
     ### Don't go past here if resuming a previous run ###
@@ -2176,6 +2212,13 @@ sub WriteDestroyedPlaceholderFiles {
     open (DEST, ">>$gCfg{destroyedFile}");
     print DEST <<"EOTXT";
 vss2svn2git has determined that this file has been destroyed in VSS history.
+vss2svn2git cannot retrieve it, since it no longer exists in the VSS database.
+EOTXT
+    close(DEST);
+
+    open (DEST, ">>$gCfg{deletedFile}");
+    print DEST <<"EOTXT";
+vss2svn2git has determined that this file has been deleted in VSS history.
 vss2svn2git cannot retrieve it, since it no longer exists in the VSS database.
 EOTXT
     close(DEST);
