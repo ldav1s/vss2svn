@@ -3,6 +3,7 @@
 use warnings;
 use strict;
 
+use Cwd 'abs_path';
 use Getopt::Long;
 use DBI;
 use DBD::SQLite2;
@@ -19,7 +20,9 @@ use Vss2Svn::ActionHandler;
 use Vss2Svn::DataCache;
 use Vss2Svn::SvnRevHandler;
 use Vss2Svn::Dumpfile;
+use Vss2Svn::GitRepo;
 use POSIX;
+use Git;
 
 require Encode;
 
@@ -28,7 +31,6 @@ our(%gCfg, %gSth, %gErr, %gFh, $gSysOut, %gActionType, %gNameLookup, %gId);
 our $VERSION = '0.11.0-nightly.$LastChangedRevision$';
 $VERSION =~ s/\$.*?(\d+).*\$/$1/; # get only the number out of the svn revision
 
-use constant ISO8601_FMT => "%Y-%m-%dT%H:%M:%S";
 
 &Initialize;
 &ConnectDatabase;
@@ -94,7 +96,9 @@ sub RunConversion {
                                 next    => 'IMPORTSVN'},
 
             # Create a dumpfile or import to repository
-            IMPORTSVN       => {handler => \&ImportToSvn,
+#            IMPORTSVN       => {handler => \&ImportToSvn,
+#                                next    => 'DONE'},
+            IMPORTSVN       => {handler => \&ImportToGit,
                                 next    => 'DONE'},
         );
 
@@ -104,7 +108,7 @@ sub RunConversion {
         $info = $joblist{ $gCfg{task} }
             or die "FATAL ERROR: Unknown task '$gCfg{task}'\n";
 
-        print "TASK: $gCfg{task}: " . POSIX::strftime(ISO8601_FMT . "\n", localtime) . "\n";
+        print "TASK: $gCfg{task}: " . POSIX::strftime(Vss2Svn::GitRepo::ISO8601_FMT . "\n", localtime) . "\n";
         push @{ $gCfg{tasks} }, $gCfg{task};
 
         if ($gCfg{prompt}) {
@@ -1224,6 +1228,7 @@ ACTION:
         }
         print "revision $revision: ", timestr(timediff(new Benchmark, $t0)),"\n"
             if $gCfg{timing};
+
     }
 
     my @err = @{ $dumpfile->{errors} };
@@ -1282,6 +1287,99 @@ sub CheckForDestroy {
     }
     return $physpath;
 }
+
+###############################################################################
+#  ImportToGit
+###############################################################################
+sub ImportToGit {
+
+    my($sql, $sth, $action_sth, $row, $revision, $actions, $action, $physname, $itemtype);
+    my $repo = Git->repository(Directory => "$gCfg{repo}");
+    my %exported = ();
+
+    $sql = 'SELECT * FROM SvnRevision ORDER BY revision_id ASC';
+
+    $sth = $gCfg{dbh}->prepare($sql);
+    $sth->execute();
+
+    $sql = <<"EOSQL";
+SELECT * FROM
+    VssAction
+WHERE action_id IN
+    (SELECT action_id FROM SvnRevisionVssAction WHERE revision_id = ?)
+ORDER BY action_id
+EOSQL
+
+    $action_sth = $gCfg{dbh}->prepare($sql);
+
+    $sql = <<"EOSQL";
+SELECT MAX(version) FROM
+    VssAction
+WHERE physname = ?
+ AND action_id < ?
+EOSQL
+
+    my $rename_sth = $gCfg{dbh}->prepare($sql);
+
+    my $gitrepo = Vss2Svn::GitRepo->new($repo, $gCfg{repo}, $gCfg{author_info});
+
+REVISION:
+    while(defined($row = $sth->fetchrow_hashref() )) {
+
+        my $t0 = new Benchmark;
+
+        $revision = $row->{revision_id};
+        $gitrepo->begin_revision($row);
+
+
+        $action_sth->execute($revision);
+        $actions = $action_sth->fetchall_arrayref( {} );
+
+ACTION:
+        foreach $action(@$actions) {
+            $physname = $action->{physname};
+            $itemtype = $action->{itemtype};
+
+            my $version = $action->{version};
+            if (   !defined $version
+                   && (   $action->{action} eq 'ADD'
+                          || $action->{action} eq 'COMMIT')) {
+                &ThrowWarning("'$physname': no version specified for retrieval");
+
+                # fall through and try with version 1.
+                $version = 1;
+            }
+
+            if ($itemtype == 2 && defined $version) {
+                if ($action->{action} eq 'RENAME') {
+                    # version is wrong, step back to the previous action_id version
+                    $rename_sth->execute($physname, $action->{action_id});
+                    $version = $rename_sth->fetchall_arrayref()->[0][0];
+                }
+                $exported{$physname} = &ExportVssPhysFile($physname, $version);
+            } else {
+                $exported{$physname} = undef;
+            }
+
+            # do_action needs to know the revision_id, so paste it on
+            $action->{revision_id} = $revision;
+            $gitrepo->do_action($action, $exported{$physname});
+        }
+        print "revision $revision: ", timestr(timediff(new Benchmark, $t0)),"\n"
+            if $gCfg{timing};
+
+        $gitrepo->commit();
+    }
+
+    my @err = @{ $gitrepo->{errors} };
+
+    if (scalar @err > 0) {
+        map { &ThrowWarning($_) } @err;
+    }
+
+    $gitrepo->finish();
+
+}  #  End ImportToGit
 
 ###############################################################################
 #  ExportVssPhysFile
@@ -1357,6 +1455,7 @@ Start Time   : $starttime
 VSS Dir      : $gCfg{vssdir}
 Temp Dir     : $gCfg{tempdir}
 Dumpfile     : $gCfg{dumpfile}
+git repo     : $gCfg{repo}
 VSS Encoding : $gCfg{encoding}
 Auto Props   : $auto_props
 trunk dir    : $gCfg{trunkdir}
@@ -2008,16 +2107,27 @@ FIELD:
 sub Initialize {
     $| = 1;
 
-    GetOptions(\%gCfg,'vssdir=s','tempdir=s','dumpfile=s','resume','verbose',
+    GetOptions(\%gCfg,'vssdir=s','tempdir=s','dumpfile=s', 'repo=s','resume','verbose',
                'debug','timing+','task=s','revtimerange=i','ssphys=s',
-               'encoding=s','trunkdir=s','auto_props=s', 'label_mapper=s', 'md5');
+               'encoding=s','trunkdir=s','auto_props=s', 'author_info=s', 'label_mapper=s', 'md5');
 
     &GiveHelp("Must specify --vssdir") if !defined($gCfg{vssdir});
+    &GiveHelp("Must specify --author_info") if !defined($gCfg{author_info});
     $gCfg{tempdir} = './_vss2svn' if !defined($gCfg{tempdir});
     $gCfg{dumpfile} = 'vss2svn-dumpfile.dat' if !defined($gCfg{dumpfile});
+    $gCfg{repo} = 'repo' if !defined($gCfg{repo});
+    $gCfg{repo} = abs_path($gCfg{repo});
+
+    if (! -d $gCfg{repo}) {
+        die "repo directory '$gCfg{repo}' is not a directory";
+    }
 
     if (defined($gCfg{auto_props}) && ! -r $gCfg{auto_props}) {
         die "auto_props file '$gCfg{auto_props}' is not readable";
+    }
+
+    if (defined($gCfg{author_info}) && ! -r $gCfg{author_info}) {
+        die "author_info file '$gCfg{author_info}' is not readable";
     }
 
     if (defined($gCfg{label_mapper}) && ! -r $gCfg{label_mapper}) {
@@ -2179,6 +2289,10 @@ OPTIONAL PARAMETERS:
                         default is ./_vss2svn
     --dumpfile <file> : specify the subversion dumpfile to be created;
                         default is ./vss2svn-dumpfile.dat
+    --repo <directory> : specify the git repo to use;
+                        default is 'repo'.  It is assumed that it has been
+                        initialized with 'git init' and contains appropriate
+                        settings files (e.g, .gitignore, .gitattributes, etc.).
     --revtimerange <sec> : specify the difference between two ss actions
                            that are treated as one subversion revision;
                            default is 3600 seconds (== 1hour)
@@ -2198,6 +2312,8 @@ OPTIONAL PARAMETERS:
                         converted repository (default = "/")
     --auto_props      : Specify an autoprops ini file to use, e.g.
                         --auto_props="c:/Dokumente und Einstellungen/user/Anwendungsdaten/Subversion/config"
+    --author_info     : Tab separated file of <username> <author> <author_email> where <username> is a
+                        VSS username
     --md5             : generate md5 checksums
     --label_mapper    : INI style file to map labels to different locataions
 EOTXT
