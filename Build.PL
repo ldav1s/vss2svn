@@ -21,6 +21,7 @@ Module::Build->new
           'Git' => 0,
           'Hash::Case' => 0,
           'File::Spec' => 0,
+          'IPC::Run' => 0,
       },
       script_files => { 'script/vss2svn.pl' => 'script/vss2svn.pl', 'ssphys/ssphys' => 'bin/ssphys'},
       pm_files => { 'script/Vss2Svn/ActionHandler.pm' => 'lib/Vss2Svn/ActionHandler.pm',

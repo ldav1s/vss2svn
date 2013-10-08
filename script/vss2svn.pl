@@ -11,6 +11,8 @@ use XML::Simple;
 use File::Find;
 use File::Path;
 use File::Copy;
+use File::Spec;
+use IPC::Run qw( run );
 use Time::CTime;
 use Data::Dumper;
 use Benchmark ':hireswallclock';
@@ -127,7 +129,9 @@ sub RunConversion {
 #  LoadVssNames
 ###############################################################################
 sub LoadVssNames {
-    &DoSsCmd("info -e$gCfg{encoding} \"$gCfg{vssdatadir}/names.dat\"");
+    my @cmd = ('info', "-e$gCfg{encoding}",
+               File::Spec->catdir($gCfg{vssdatadir}, 'names.dat'));
+    &DoSsCmd(@cmd);
 
     my $xs = XML::Simple->new(KeyAttr => [],
                               ForceArray => [qw(NameCacheEntry Entry)],);
@@ -173,7 +177,9 @@ sub FindPhysDbFiles {
     my $cache = Vss2Svn::DataCache->new('Physical')
         || &ThrowError("Could not create cache 'Physical'");
     my $vssdb_cnt = 0;
-    my $vssfile_depth = 2;
+    my @dirs = ($gCfg{vssdatadir});
+    my $start_depth = $gCfg{vssdatadir} =~ tr[/][];
+    my $vssfile_depth = $start_depth + 1;
 
     find({
             preprocess => sub {
@@ -187,7 +193,7 @@ sub FindPhysDbFiles {
                 $cache->add(uc($_), $File::Find::name);
                 ++$vssdb_cnt;
             },
-         }, $gCfg{vssdatadir});
+         }, @dirs);
 
     print "Found $vssdb_cnt VSS database files at '$gCfg{vssdatadir}'\n" if $gCfg{verbose};
 
@@ -229,8 +235,8 @@ sub GetVssPhysInfo {
     my($cache, $datapath, $physname, $xs) = @_;
 
     print "datapath: \"$datapath\"\n" if $gCfg{debug};
-
-    &DoSsCmd("info -e$gCfg{encoding} \"$datapath\"");
+    my @cmd = ('info', "-e$gCfg{encoding}", "$datapath");
+    &DoSsCmd(@cmd);
 
     my $xml = $xs->XMLin($gSysOut);
     my $parentphys;
@@ -1425,8 +1431,10 @@ sub ExportVssPhysFile {
 
     if (! -e "$exportdir/$physname.$version" ) {
         # get all versions we can find from the physical file
-        &DoSsCmd("get -b -v$version --force-overwrite -e$gCfg{encoding} \"$physpath\" $exportdir/$physname");
-
+        my @cmd = ('get', '-b', "-v$version", '--force-overwrite',
+                   "-e$gCfg{encoding}", $physpath,
+                   File::Spec->catdir($exportdir, $physname));
+        &DoSsCmd(@cmd);
         if (! -e "$exportdir/$physname.$version") {
             $physpath = &CheckForDestroy($exportdir, $physname, $version, 0);
         }
@@ -1608,9 +1616,9 @@ EOSQL
 #  DoSsCmd
 ###############################################################################
 sub DoSsCmd {
-    my($cmd) = @_;
+    my(@cmd) = @_;
 
-    my $ok = &DoSysCmd("\"$gCfg{ssphys}\" $cmd", 1);
+    my $ok = &DoSysCmd(@cmd);
 
     $gSysOut =~ s/\x00//g; # remove null bytes
     $gSysOut =~ s/.\x08//g; # yes, I've seen VSS store backspaces in names!
@@ -1623,10 +1631,14 @@ sub DoSsCmd {
 #  DoSysCmd
 ###############################################################################
 sub DoSysCmd {
-    my($cmd, $allowfail) = @_;
+    my(@args) = @_;
+    my $allowfail = 1;
 
-    print "$cmd\n" if $gCfg{verbose};
-    $gSysOut = `$cmd`;
+    unshift @args, $gCfg{ssphys};
+
+    print join(" ", @args) .  "\n" if $gCfg{verbose};
+
+    run \@args, '>', \$gSysOut;
 
     print $gSysOut if $gCfg{debug};
 
@@ -1638,7 +1650,7 @@ sub DoSysCmd {
 
         $rv = 0;
     } elsif ($?) {
-        &ThrowWarning(sprintf "FAILED with non-zero exit status %d (cmd: %s)", $? >> 8, $cmd);
+        &ThrowWarning(sprintf "FAILED with non-zero exit status %d (cmd: `%s')", $? >> 8, join(" ", @args));
         die unless $allowfail;
 
         $rv = 0;
@@ -1652,7 +1664,10 @@ sub DoSysCmd {
 #  GetSsVersion
 ###############################################################################
 sub GetSsVersion {
-    my $out = `\"$gCfg{ssphys}\" --version 2>&1`;
+    my(@args) = ($gCfg{ssphys}, '--version');
+    my $out;
+
+    run \@args, '>&', \$out;
     # Build numbers look like:
     #  a.) ssphys 0.20.0, Build 123
     #  b.) ssphys 0.20.0, Build 123:150
@@ -1813,10 +1828,6 @@ sub SetupGlobals {
     }
 
     $gCfg{ssphys} = 'ssphys' if !defined($gCfg{ssphys});
-    $gCfg{vssdatadir} = "$gCfg{vssdir}/data";
-
-    (-d "$gCfg{vssdatadir}") or &ThrowError("$gCfg{vssdir} does not appear "
-                                            . "to be a valid VSS database");
 
     &SetupActionTypes;
 
@@ -2117,9 +2128,16 @@ sub Initialize {
     $gCfg{dumpfile} = 'vss2svn-dumpfile.dat' if !defined($gCfg{dumpfile});
     $gCfg{repo} = 'repo' if !defined($gCfg{repo});
     $gCfg{repo} = abs_path($gCfg{repo});
+    $gCfg{vssdir} = abs_path($gCfg{vssdir});
+    $gCfg{vssdatadir} = File::Spec->catdir($gCfg{vssdir}, 'data');
 
     if (! -d $gCfg{repo}) {
         die "repo directory '$gCfg{repo}' is not a directory";
+    }
+
+    if (! -d $gCfg{vssdatadir}) {
+        die "The VSS database '$gCfg{vssdir}' "
+            . "does not appear to be a valid VSS database, as there's no 'data' directory.";
     }
 
     if (defined($gCfg{auto_props}) && ! -r $gCfg{auto_props}) {
