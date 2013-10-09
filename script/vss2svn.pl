@@ -547,8 +547,10 @@ sub MergeParentData {
         }
     }
 
-    foreach $id (@delchild) {
-        &DeleteChildRec($id);
+    if (scalar @delchild > 0) {
+        # just numbers here, no need to quote
+        my $in_clause = join q{,}, @delchild;
+        $gCfg{dbh}->do("DELETE FROM PhysicalAction WHERE action_id IN ($in_clause)");
     }
 
     1;
@@ -734,7 +736,7 @@ sub MergeMoveData {
 
         if (defined $chosenChildRecord) {
             $source = $chosenChildRecord->{parentphys};
-            &DeleteChildRec($chosenChildRecord->{action_id});
+            $gCfg{dbh}->do("DELETE FROM PhysicalAction WHERE action_id IN ($chosenChildRecord->{action_id})");
 
             my $sql = <<"EOSQL";
 UPDATE
@@ -835,11 +837,17 @@ sub RemoveTemporaryCheckIns {
 
         # need to pull in all recs at once, since we'll be updating/deleting data
         my $recs = $update->fetchall_arrayref( {} );
+        my @delchild = ();
 
         foreach my $rec (@$recs) {
             print "Remove action_id $rec->{action_id}, $rec->{physname}, $rec->{actiontype}, $rec->{itemname}\n";
             print "       $rec->{comment}\n" if defined ($rec->{comment});
-            &DeleteChildRec($rec->{action_id});
+            push(@delchild, $rec->{action_id});
+        }
+        if (scalar @delchild > 0) {
+            # just numbers here, no need to quote
+            my $in_clause = join q{,}, @delchild;
+            $gCfg{dbh}->do("DELETE FROM PhysicalAction WHERE action_id IN ($in_clause)");
         }
     }
 
@@ -901,9 +909,10 @@ sub MergeUnpinPinData {
         }
     }
 
-    my $id;
-    foreach $id (@delchild) {
-        &DeleteChildRec($id);
+    if (scalar @delchild > 0) {
+        # just numbers here, no need to quote
+        my $in_clause = join q{,}, @delchild;
+        $gCfg{dbh}->do("DELETE FROM PhysicalAction WHERE action_id IN ($in_clause)");
     }
 
     1;
@@ -1012,18 +1021,6 @@ sub BuildComments {
     1;
 
 }  #  End BuildComments
-
-###############################################################################
-#  DeleteChildRec
-###############################################################################
-sub DeleteChildRec {
-    my($id) = @_;
-
-    my $sql = "DELETE FROM PhysicalAction WHERE action_id = ?";
-
-    my $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute($id);
-}  #  End DeleteChildRec
 
 ###############################################################################
 #  BuildVssActionHistory
