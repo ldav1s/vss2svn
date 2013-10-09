@@ -14,14 +14,12 @@ use File::Copy;
 use File::Spec;
 use IPC::Run qw( run );
 use Time::CTime;
-use Data::Dumper;
 use Benchmark ':hireswallclock';
 
 use lib '.';
 use Vss2Svn::ActionHandler;
 use Vss2Svn::DataCache;
 use Vss2Svn::SvnRevHandler;
-use Vss2Svn::Dumpfile;
 use Vss2Svn::GitRepo;
 use POSIX;
 use Git;
@@ -97,9 +95,7 @@ sub RunConversion {
             BUILDACTIONHIST => {handler => \&BuildVssActionHistory,
                                 next    => 'IMPORTSVN'},
 
-            # Create a dumpfile or import to repository
-#            IMPORTSVN       => {handler => \&ImportToSvn,
-#                                next    => 'DONE'},
+            # import to repository
             IMPORTSVN       => {handler => \&ImportToGit,
                                 next    => 'DONE'},
         );
@@ -1057,7 +1053,6 @@ ROW:
 
         $handler = Vss2Svn::ActionHandler->new($row);
         $handler->{verbose} = $gCfg{verbose};
-        $handler->{trunkdir} = $gCfg{trunkdir};
         $physinfo = $handler->physinfo();
 
         if (defined($physinfo) && $physinfo->{type} != $row->{itemtype} ) {
@@ -1145,105 +1140,6 @@ ROW:
     $labelcache->commit();
 
 }  #  End BuildVssActionHistory
-
-###############################################################################
-#  ImportToSvn
-###############################################################################
-sub ImportToSvn {
-    # For the time being, we support only creating a dumpfile and not directly
-    # importing to SVN. We could perhaps add this functionality by making the
-    # CreateSvnDumpfile logic more generic and using polymorphism to switch out
-    # the Vss2Svn::Dumpfile object with one that handles imports.
-
-    &CreateSvnDumpfile;
-}  #  End ImportToSvn
-
-###############################################################################
-#  CreateSvnDumpfile
-###############################################################################
-sub CreateSvnDumpfile {
-    my $fh;
-
-    my $file = $gCfg{dumpfile};
-    open $fh, ">$file"
-        or &ThrowError("Could not create dumpfile '$file'");
-
-    my($sql, $sth, $action_sth, $row, $revision, $actions, $action, $physname, $itemtype);
-
-    my %exported = ();
-
-    $sql = 'SELECT * FROM SvnRevision ORDER BY revision_id ASC';
-
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute();
-
-    $sql = <<"EOSQL";
-SELECT * FROM
-    VssAction
-WHERE action_id IN
-    (SELECT action_id FROM SvnRevisionVssAction WHERE revision_id = ?)
-ORDER BY action_id
-EOSQL
-
-    $action_sth = $gCfg{dbh}->prepare($sql);
-
-    my $autoprops = Vss2Svn::Dumpfile::AutoProps->new($gCfg{auto_props}) if $gCfg{auto_props};
-    my $labelmapper = Vss2Svn::Dumpfile::LabelMapper->new($gCfg{label_mapper}) if $gCfg{label_mapper};
-    my $dumpfile = Vss2Svn::Dumpfile->new($fh, $autoprops, $gCfg{md5}, $labelmapper);
-    Vss2Svn::Dumpfile->SetTempDir($gCfg{tempdir});
-
-REVISION:
-    while(defined($row = $sth->fetchrow_hashref() )) {
-
-        my $t0 = new Benchmark;
-
-        $revision = $row->{revision_id};
-        $dumpfile->begin_revision($row);
-
-
-        $action_sth->execute($revision);
-        $actions = $action_sth->fetchall_arrayref( {} );
-
-ACTION:
-        foreach $action(@$actions) {
-            $physname = $action->{physname};
-            $itemtype = $action->{itemtype};
-
-            my $version = $action->{version};
-            if (   !defined $version
-                   && (   $action->{action} eq 'ADD'
-                          || $action->{action} eq 'COMMIT')) {
-                &ThrowWarning("'$physname': no version specified for retrieval");
-
-                # fall through and try with version 1.
-                $version = 1;
-            }
-
-            if ($itemtype == 2 && defined $version) {
-                $exported{$physname} = &ExportVssPhysFile($physname, $version);
-            } else {
-                $exported{$physname} = undef;
-            }
-
-            # do_action needs to know the revision_id, so paste it on
-            $action->{revision_id} = $revision;
-            $dumpfile->do_action($action, $exported{$physname});
-        }
-        print "revision $revision: ", timestr(timediff(new Benchmark, $t0)),"\n"
-            if $gCfg{timing};
-
-    }
-
-    my @err = @{ $dumpfile->{errors} };
-
-    if (scalar @err > 0) {
-        map { &ThrowWarning($_) } @err;
-    }
-
-    $dumpfile->finish();
-    close $fh;
-
-}  #  End CreateSvnDumpfile
 
 ###############################################################################
 #  CheckForDestroy
@@ -1449,8 +1345,6 @@ sub ShowHeader {
     my $starttime = ctime($^T);
 
     my $ssversion = &GetSsVersion();
-    my $auto_props = (!defined $gCfg{auto_props}) ? "" : $gCfg{auto_props};
-    my $label_mapper = (!defined $gCfg{label_mapper}) ? "" : $gCfg{label_mapper};
 
     print <<"EOTXT";
 ======== VSS2SVN ========
@@ -1459,14 +1353,8 @@ Start Time   : $starttime
 
 VSS Dir      : $gCfg{vssdir}
 Temp Dir     : $gCfg{tempdir}
-Dumpfile     : $gCfg{dumpfile}
 git repo     : $gCfg{repo}
 VSS Encoding : $gCfg{encoding}
-Auto Props   : $auto_props
-trunk dir    : $gCfg{trunkdir}
-md5          : $gCfg{md5}
-label dir    : $gCfg{labeldir}
-label mapper : $label_mapper
 
 VSS2SVN ver  : $VERSION
 SSPHYS exe   : $gCfg{ssphys}
@@ -1514,15 +1402,7 @@ EOTXT
 =============================================================================
                              END OF CONVERSION
 
-The VSS to SVN conversion is complete. You should now use the "svnadmin load"
-command to load the generated dumpfile '$gCfg{dumpfile}'. The "svnadmin"
-utility is provided as part of the Subversion command-line toolset; use a
-command such as the following:
-    svnadmin load <repodir> < "$gCfg{dumpfile}"
-
-You may need to precede this with "svnadmin create <repodir>" if you have not
-yet created a repository. Type "svnadmin help <cmd>" for more information on
-"create" and/or "load".
+The VSS to GIT conversion is complete.
 
 If any errors occurred during the conversion, they are summarized above.
 
@@ -1559,7 +1439,7 @@ Elapsed time            : $elapsed (H:M:S)
 
 VSS Actions read        : $actions
 SVN Revisions converted : $revisions
-Date range (YYYY/MM/DD) : $mintime to $maxtime
+Date range (YYYY-MM-DD) : $mintime to $maxtime
 
 EOTXT
 
@@ -1599,9 +1479,7 @@ EOSQL
     ($mintime, $maxtime) = $gCfg{dbh}->selectrow_array($sql);
 
     foreach($mintime, $maxtime) {
-        $_ = &Vss2Svn::Dumpfile::SvnTimestamp($_);
-        s:T.*::;
-        s:-:/:g;
+        $_ = POSIX::strftime("%Y-%m-%d", localtime($_));
     }
 
     # initial creation of the repo wasn't considered an action or revision
@@ -2115,14 +1993,13 @@ FIELD:
 sub Initialize {
     $| = 1;
 
-    GetOptions(\%gCfg,'vssdir=s','tempdir=s','dumpfile=s', 'repo=s','resume','verbose',
+    GetOptions(\%gCfg,'vssdir=s','tempdir=s','repo=s','resume','verbose',
                'debug','timing+','task=s','revtimerange=i','ssphys=s',
-               'encoding=s','trunkdir=s','auto_props=s', 'author_info=s', 'label_mapper=s', 'md5');
+               'encoding=s','author_info=s');
 
     &GiveHelp("Must specify --vssdir") if !defined($gCfg{vssdir});
     &GiveHelp("Must specify --author_info") if !defined($gCfg{author_info});
-    $gCfg{tempdir} = './_vss2svn' if !defined($gCfg{tempdir});
-    $gCfg{dumpfile} = 'vss2svn-dumpfile.dat' if !defined($gCfg{dumpfile});
+    $gCfg{tempdir} = '_vss2svn' if !defined($gCfg{tempdir});
     $gCfg{repo} = 'repo' if !defined($gCfg{repo});
     $gCfg{repo} = abs_path($gCfg{repo});
     $gCfg{vssdir} = abs_path($gCfg{vssdir});
@@ -2137,30 +2014,21 @@ sub Initialize {
             . "does not appear to be a valid VSS database, as there's no 'data' directory.";
     }
 
-    if (defined($gCfg{auto_props}) && ! -r $gCfg{auto_props}) {
-        die "auto_props file '$gCfg{auto_props}' is not readable";
-    }
-
     if (defined($gCfg{author_info}) && ! -r $gCfg{author_info}) {
         die "author_info file '$gCfg{author_info}' is not readable";
     }
 
-    if (defined($gCfg{label_mapper}) && ! -r $gCfg{label_mapper}) {
-        die "label_mapper file '$gCfg{label_mapper}' is not readable";
-    }
-
-    $gCfg{sqlitedb} = "$gCfg{tempdir}/vss_data.db";
+    $gCfg{sqlitedb} = File::Spec->catfile($gCfg{tempdir}, 'vss_data.db');
 
     # XML output from ssphysout placed here.
-    $gCfg{ssphysout} = "$gCfg{tempdir}/ssphysout";
+    $gCfg{ssphysout} = File::Spec->catfile($gCfg{tempdir}, 'ssphysout');
     $gCfg{encoding} = 'windows-1252' if !defined($gCfg{encoding});
 
     # Commit messages for SVN placed here.
-    $gCfg{svncomment} = "$gCfg{tempdir}/svncomment.tmp.txt";
     mkdir $gCfg{tempdir} unless (-d $gCfg{tempdir});
 
     # Directories for holding VSS revisions
-    $gCfg{vssdata} = "$gCfg{tempdir}/vssdata";
+    $gCfg{vssdata} = File::Spec->catdir($gCfg{tempdir}, 'vssdata');
 
     if ($gCfg{resume} && !-e $gCfg{sqlitedb}) {
         warn "WARNING: --resume set but no database exists; starting new "
@@ -2172,18 +2040,8 @@ sub Initialize {
         $gCfg{verbose} = 1;
     }
     $gCfg{timing} = 0 unless defined $gCfg{timing};
-    $gCfg{md5} = 0 unless defined $gCfg{md5};
 
     $gCfg{starttime} = scalar localtime($^T);
-
-    # trunkdir should (must?) be without trailing slash
-    $gCfg{trunkdir} = '' unless defined $gCfg{trunkdir};
-    $gCfg{trunkdir} =~ s:\\:/:g;
-    $gCfg{trunkdir} =~ s:/$::;
-
-    $gCfg{junkdir} = '/lost+found';
-
-    $gCfg{labeldir} = '/labels';
 
     $gCfg{errortasks} = [];
 
@@ -2194,9 +2052,9 @@ sub Initialize {
 
     &ConfigureXmlParser();
 
-    $gCfg{destroyedFile} = "$gCfg{tempdir}/destroyed.txt";
-    $gCfg{deletedFile} = "$gCfg{tempdir}/deleted.txt";
-    $gCfg{indeterminateFile} = "$gCfg{tempdir}/indeterminate.txt";
+    $gCfg{destroyedFile} = File::Spec->catfile($gCfg{tempdir},'destroyed.txt');
+    $gCfg{deletedFile} = File::Spec->catfile($gCfg{tempdir},'deleted.txt');
+    $gCfg{indeterminateFile} = File::Spec->catfile($gCfg{tempdir},'indeterminate.txt');
 
     ### Don't go past here if resuming a previous run ###
     if ($gCfg{resume}) {
@@ -2292,18 +2150,18 @@ sub GiveHelp {
 
 $msg
 
-USAGE: perl vss2svn.pl --vssdir <dir> [options]
+USAGE: perl vss2svn.pl --vssdir <dir> --author_info <file> [options]
 
 REQUIRED PARAMETERS:
     --vssdir <dir>  : Directory where VSS database is located. This should be
                       the directory in which the "srcsafe.ini" file is located.
+    --author_info <file>   : Tab separated file of <username> <author> <author_email> where <username> is a
+                        VSS username
 
 OPTIONAL PARAMETERS:
     --ssphys <path>   : Full path to ssphys.exe program; uses PATH otherwise
     --tempdir <dir>   : Temp directory to use during conversion;
-                        default is ./_vss2svn
-    --dumpfile <file> : specify the subversion dumpfile to be created;
-                        default is ./vss2svn-dumpfile.dat
+                        default is '_vss2svn'
     --repo <directory> : specify the git repo to use;
                         default is 'repo'.  It is assumed that it has been
                         initialized with 'git init' and contains appropriate
@@ -2323,14 +2181,6 @@ OPTIONAL PARAMETERS:
     --timing          : Show timing information during various steps
     --encoding        : Specify the encoding used in VSS;
                         Default is windows-1252
-    --trunkdir        : Specify where to map the VSS Project Root in the
-                        converted repository (default = "/")
-    --auto_props      : Specify an autoprops ini file to use, e.g.
-                        --auto_props="c:/Dokumente und Einstellungen/user/Anwendungsdaten/Subversion/config"
-    --author_info     : Tab separated file of <username> <author> <author_email> where <username> is a
-                        VSS username
-    --md5             : generate md5 checksums
-    --label_mapper    : INI style file to map labels to different locataions
 EOTXT
 
     exit(1);
