@@ -11,20 +11,17 @@ current vss2svn, I thought it might be better to start with what I
 know.
 
 The idea I've come up with is to use ssphys and it's related tools to
-import the data and retarget the output to git at the IMPORTSVN stage.
-I think I'm going to be using mostly the data output by the physical
-passes and not so much the later grouping into SVN commits, etc., as
-git has the ability to edit history much more flexibly than
-subversion.
+import the data and retarget the output to git at the IMPORTGIT
+(IMPORTSVN) stage. The scheduling that was done to get it to SVN was
+actually pretty good, but needed a couple of minor fixes.
 
-The git repository as I see it now will be built up using the git
-plumbing layer mostly, starting with files, trees, commits, and
-tags.
+The import to git is pretty straightforward.
 
 It'll be important to set up the files to be imported using the
-.gitattributes in the git repository for crlf adjustment before
-starting the import.
+.gitattributes and .gitignores in the git repository for crlf
+adjustment before starting the import.
 
 This is very experimental right now, and might be kind of broken.
-Also it'll only work on Linux for now.
+Also it'll only work on Linux for now, because it supports hard links
+to emulate "shares".
 
