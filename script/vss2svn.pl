@@ -93,10 +93,10 @@ sub RunConversion {
             # Take the history of physical actions and convert them to VSS
             # file actions
             BUILDACTIONHIST => {handler => \&BuildVssActionHistory,
-                                next    => 'IMPORTSVN'},
+                                next    => 'IMPORTGIT'},
 
             # import to repository
-            IMPORTSVN       => {handler => \&ImportToGit,
+            IMPORTGIT       => {handler => \&ImportToGit,
                                 next    => 'DONE'},
         );
 
@@ -2163,7 +2163,7 @@ OPTIONAL PARAMETERS:
     --task <task>     : specify the task to resume; task is one of the following
                         INIT, LOADVSSNAMES, FINDDBFILES, GETPHYSHIST,
                         MERGEPARENTDATA, MERGEMOVEDATA, REMOVETMPCHECKIN,
-                        MERGEUNPINPIN, BUILDACTIONHIST, IMPORTSVN
+                        MERGEUNPINPIN, BUILDACTIONHIST, IMPORTGIT
 
     --verbose         : Print more info about the items being processed
     --debug           : Print lots of debugging info.
