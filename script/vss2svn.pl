@@ -1406,8 +1406,8 @@ The VSS to GIT conversion is complete.
 
 If any errors occurred during the conversion, they are summarized above.
 
-For more information on the vss2svn project, see:
-http://www.pumacode.org/projects/vss2svn/
+For more information on the vss2svn2git project, see:
+https://github.com/ldav1s/vss2svn
 
 EOTXT
 
