@@ -1438,7 +1438,7 @@ Ended at                : $endtime
 Elapsed time            : $elapsed (H:M:S)
 
 VSS Actions read        : $actions
-SVN Revisions converted : $revisions
+git commits converted   : $revisions
 Date range (YYYY-MM-DD) : $mintime to $maxtime
 
 EOTXT
