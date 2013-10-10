@@ -26,10 +26,94 @@ use Git;
 
 require Encode;
 
+use constant {
+    TASK_INIT => 'INIT',
+    TASK_LOADVSSNAMES => 'LOADVSSNAMES',
+    TASK_FINDDBFILES => 'FINDDBFILES',
+    TASK_GETPHYSHIST => 'GETPHYSHIST',
+    TASK_MERGEPARENTDATA => 'MERGEPARENTDATA',
+    TASK_MERGEMOVEDATA => 'MERGEMOVEDATA',
+    TASK_REMOVETMPCHECKIN => 'REMOVETMPCHECKIN',
+    TASK_MERGEUNPINPIN => 'MERGEUNPINPIN',
+    TASK_BUILDCOMMENTS => 'BUILDCOMMENTS',
+    TASK_BUILDACTIONHIST => 'BUILDACTIONHIST',
+    TASK_IMPORTGIT => 'IMPORTGIT',
+    TASK_DONE => 'DONE',
+};
+
 our(%gCfg, %gSth, %gErr, %gFh, $gSysOut, %gActionType, %gNameLookup, %gId);
 
 our $VERSION = '0.11.0-nightly.$LastChangedRevision$';
 $VERSION =~ s/\$.*?(\d+).*\$/$1/; # get only the number out of the svn revision
+
+# store a hash of actions to take; allows restarting in case of failed
+# migration
+my @joblist =
+    (
+     {
+         task    => TASK_INIT,
+         handler => sub{ 1; },
+     },
+     # Load the "real" names associated with the stored "short" names
+     {
+         task => TASK_LOADVSSNAMES,
+         handler => \&LoadVssNames,
+     },
+     # Add a stub entry into the Physical table for each physical
+     # file in the VSS DB
+     {
+         task => TASK_FINDDBFILES,
+         handler => \&FindPhysDbFiles,
+     },
+     # Load the history of what happened to the physical files. This
+     # only gets us halfway there because we don't know what the real
+     # filenames are yet
+     {
+         task => TASK_GETPHYSHIST,
+         handler => \&GetPhysVssHistory,
+     },
+     # Merge data from parent records into child records where possible
+     {
+         task => TASK_MERGEPARENTDATA,
+         handler => \&MergeParentData,
+     },
+     # Merge data from move actions
+     {
+         task => TASK_MERGEMOVEDATA,
+         handler => \&MergeMoveData,
+     },
+     # Remove temporary check ins
+     {
+         task => TASK_REMOVETMPCHECKIN,
+         handler => \&RemoveTemporaryCheckIns,
+     },
+     # Remove unnecessary Unpin/pin activities
+     {
+         task => TASK_MERGEUNPINPIN,
+         handler => \&MergeUnpinPinData,
+     },
+     # Rebuild possible missing comments
+     {
+         task => TASK_BUILDCOMMENTS,
+         handler => \&BuildComments,
+     },
+     # Take the history of physical actions and convert them to VSS
+     # file actions
+     {
+         task => TASK_BUILDACTIONHIST,
+         handler => \&BuildVssActionHistory,
+     },
+     # import to repository
+     {
+         task => TASK_IMPORTGIT,
+         handler => \&ImportToGit,
+     },
+     # done state
+     {
+         task    => TASK_DONE,
+         handler => sub { 1; },
+     }
+    );
 
 
 &Initialize;
@@ -48,65 +132,23 @@ $VERSION =~ s/\$.*?(\d+).*\$/$1/; # get only the number out of the svn revision
 ###############################################################################
 sub RunConversion {
 
-    # store a hash of actions to take; allows restarting in case of failed
-    # migration
-    my %joblist =
-        (
-            INIT            => {handler => sub{ 1; },
-                                next    => 'LOADVSSNAMES'},
-
-            # Load the "real" names associated with the stored "short" names
-            LOADVSSNAMES    => {handler => \&LoadVssNames,
-                                next    => 'FINDDBFILES'},
-
-            # Add a stub entry into the Physical table for each physical
-            # file in the VSS DB
-            FINDDBFILES     => {handler => \&FindPhysDbFiles,
-                                next    => 'GETPHYSHIST'},
-
-            # Load the history of what happened to the physical files. This
-            # only gets us halfway there because we don't know what the real
-            # filenames are yet
-            GETPHYSHIST     => {handler => \&GetPhysVssHistory,
-                                next    => 'MERGEPARENTDATA'},
-
-            # Merge data from parent records into child records where possible
-            MERGEPARENTDATA => {handler => \&MergeParentData,
-                                next    => 'MERGEMOVEDATA'},
-
-            # Merge data from move actions
-            MERGEMOVEDATA => {handler => \&MergeMoveData,
-                                next    => 'REMOVETMPCHECKIN'},
-
-            # Remove temporary check ins
-            REMOVETMPCHECKIN => {handler => \&RemoveTemporaryCheckIns,
-                                 next    => 'MERGEUNPINPIN'},
-
-            # Remove unnecessary Unpin/pin activities
-            MERGEUNPINPIN => {handler => \&MergeUnpinPinData,
-                                 next    => 'BUILDCOMMENTS'},
-
-            # Rebuild possible missing comments
-            BUILDCOMMENTS => {handler => \&BuildComments,
-                                 next    => 'BUILDACTIONHIST'},
-
-            # Take the history of physical actions and convert them to VSS
-            # file actions
-            BUILDACTIONHIST => {handler => \&BuildVssActionHistory,
-                                next    => 'IMPORTGIT'},
-
-            # import to repository
-            IMPORTGIT       => {handler => \&ImportToGit,
-                                next    => 'DONE'},
-        );
 
     my $info;
+    my $taskmap = {};
+    my $i = 0;
 
-    while ($gCfg{task} ne 'DONE') {
-        $info = $joblist{ $gCfg{task} }
-            or die "FATAL ERROR: Unknown task '$gCfg{task}'\n";
+    foreach my $e (@joblist) {
+        $taskmap->{$e->{task}} = $i++;
+    }
 
-        print "TASK: $gCfg{task}: " . POSIX::strftime(Vss2Svn::GitRepo::ISO8601_FMT . "\n", localtime) . "\n";
+    die "FATAL ERROR: Unknown task '$gCfg{task}'\n"
+        unless defined $taskmap->{$gCfg{task}};
+
+    for ($i = $taskmap->{$gCfg{task}}; $i < (scalar @joblist)-1; ++$i) {
+        $info = $joblist[$i];
+
+        print "TASK: $gCfg{task}: "
+            . POSIX::strftime(Vss2Svn::GitRepo::ISO8601_FMT . "\n", localtime) . "\n";
         push @{ $gCfg{tasks} }, $gCfg{task};
 
         if ($gCfg{prompt}) {
@@ -115,8 +157,9 @@ sub RunConversion {
             die if $temp =~ m/^quit/i;
         }
 
+
         &{ $info->{handler} };
-        &SetSystemTask( $info->{next} );
+        &SetSystemTask( $joblist[$i+1]->{task} );
     }
 
 }  #  End RunConversion
@@ -1340,7 +1383,7 @@ sub ExportVssPhysFile {
 #  ShowHeader
 ###############################################################################
 sub ShowHeader {
-    my $info = $gCfg{task} eq 'INIT'? 'BEGINNING CONVERSION...' :
+    my $info = $gCfg{task} eq TASK_INIT ? 'BEGINNING CONVERSION...' :
         "RESUMING CONVERSION FROM TASK '$gCfg{task}' AT STEP $gCfg{step}...";
     my $starttime = ctime($^T);
 
@@ -1671,7 +1714,7 @@ sub ConnectDatabase {
     my $db = $gCfg{sqlitedb};
 
     if (-e $db && (!$gCfg{resume} ||
-                   (defined($gCfg{task}) && $gCfg{task} eq 'INIT'))) {
+                   (defined($gCfg{task}) && $gCfg{task} eq TASK_INIT))) {
 
         unlink $db or &ThrowError("Could not delete existing database "
                                   .$gCfg{sqlitedb});
@@ -1696,7 +1739,7 @@ sub DisconnectDatabase {
 #  SetupGlobals
 ###############################################################################
 sub SetupGlobals {
-    if (defined($gCfg{task}) && $gCfg{task} eq 'INIT') {
+    if (defined($gCfg{task}) && $gCfg{task} eq TASK_INIT) {
         &InitSysTables;
     } else {
         &ReloadSysTables;
@@ -2019,9 +2062,11 @@ sub Initialize {
     # Directories for holding VSS revisions
     $gCfg{vssdata} = File::Spec->catdir($gCfg{tempdir}, 'vssdata');
 
+    $gCfg{resume} = 1 if defined $gCfg{task} && ($gCfg{task} ne TASK_INIT);
+
     if ($gCfg{resume} && !-e $gCfg{sqlitedb}) {
-        warn "WARNING: --resume set but no database exists; starting new "
-            . "conversion...";
+        warn "WARNING: --resume set but no database exists; "
+            . "starting new conversion...";
         $gCfg{resume} = 0;
     }
 
@@ -2058,7 +2103,7 @@ sub Initialize {
     $gCfg{ssphys} ||= 'ssphys';
     $gCfg{svn} ||= 'SVN.exe';
 
-    $gCfg{task} = 'INIT';
+    $gCfg{task} = TASK_INIT;
     $gCfg{step} = 0;
 }  #  End Initialize
 
@@ -2132,6 +2177,30 @@ sub ConfigureXmlParser {
 ###############################################################################
 sub GiveHelp {
     my($msg) = @_;
+    my @states = ();
+    my @states_line = ();
+    my $line = '';
+
+    # columnate the task states
+    foreach my $e (@joblist) {
+        push @states, $e->{task};
+    }
+    foreach my $e (@states) {
+        if (!((length($e) + 1 + length($line)) > 50)) {
+            if (length($line) == 0) {
+                $line = $e;
+            } else {
+                $line .= ' ' . $e;
+            }
+        } else {
+            push @states_line, $line;
+            $line = $e;
+        }
+    }
+    push @states_line, $line;
+    $line = join q{\n}, @states_line;
+    my @output = `printf "$line" | column -c 50 -t | awk '{printf("%24s%-50s\\n", " ", \$0);}'`;
+    $line = join "", @output;
 
     $msg ||= 'Online Help';
 
@@ -2161,10 +2230,7 @@ OPTIONAL PARAMETERS:
 
     --resume          : Resume a failed or aborted previous run
     --task <task>     : specify the task to resume; task is one of the following
-                        INIT, LOADVSSNAMES, FINDDBFILES, GETPHYSHIST,
-                        MERGEPARENTDATA, MERGEMOVEDATA, REMOVETMPCHECKIN,
-                        MERGEUNPINPIN, BUILDACTIONHIST, IMPORTGIT
-
+$line
     --verbose         : Print more info about the items being processed
     --debug           : Print lots of debugging info.
     --timing          : Show timing information during various steps
