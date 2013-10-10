@@ -79,7 +79,7 @@ sub commit {
 
     if (!$self->{on_master_branch}) {
         # back to master
-        $self->{repo}->command('checkout', 'master');
+        $self->{repo}->command('checkout', '-q', 'master');
         $self->{on_master_branch} = 1;
     }
 
@@ -694,12 +694,12 @@ sub _label_handler {
     if (!defined $self->{label_map}->{$data->{info}}) {
         # create a new branch for this label
         $self->{label_map}->{$data->{info}} = $tagname;
-        $self->{repo}->command('checkout', '--orphan',  $tagname);
+        $self->{repo}->command('checkout', '-q', '--orphan',  $tagname);
         $self->{repo}->command('config', "branch." . $tagname . ".description",  $self->{comment}); # give it a description
         $self->{repo}->command('reset', '--hard'); # unmark all the "new" files from the commit.
         print "Label `" . $data->{info} . "' is branch `$tagname'.\n";
     } elsif ($self->{on_master_branch}) {
-        $self->{repo}->command('checkout',  $tagname);
+        $self->{repo}->command('checkout', '-q', $tagname);
     }
     $self->{on_master_branch} = 0;
 
