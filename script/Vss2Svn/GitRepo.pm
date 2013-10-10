@@ -769,8 +769,7 @@ sub _update_file_shares {
 
         foreach my $key (keys $self->{file_shares}) {
             if ($key =~ m/^\Q$oldpath\E/) {
-                my $ary = $self->{file_shares}->{$key};
-                undef $self->{file_shares}->{$key};
+                my $ary = delete $self->{file_shares}->{$key};
 
                 $key =~ s/^\Q$oldpath\E/\Q$newpath\E/;
                 $self->{file_shares}->{$key} = $ary;
@@ -783,8 +782,7 @@ sub _update_file_shares {
 
         foreach my $key (keys $self->{file_shares_rev}) {
             if ($key =~ m/^\Q$oldpath\E/) {
-                my $info = $self->{file_shares_rev}->{$key};
-                undef $self->{file_shares_rev}->{$key};
+                my $info = delete $self->{file_shares_rev}->{$key};
 
                 $key =~ s/^\Q$oldpath\E/\Q$newpath\E/;
                 $self->{file_shares_rev}->{$key} = $info;
@@ -802,11 +800,10 @@ sub _update_file_shares {
 
         foreach my $key (keys $self->{file_shares}) {
             if ($key =~ m/^\Q$oldpath\E/) {
-                my $ary = $self->{file_shares}->{$key};
-                undef $self->{file_shares}->{$key};
+                my $ary = delete $self->{file_shares}->{$key};
 
                 foreach my $e (@$ary) {
-                    undef $self->{file_shares_rev}->{$e};
+                    delete $self->{file_shares_rev}->{$e};
                 }
 
                 my $share = pop @$ary;
@@ -821,11 +818,10 @@ sub _update_file_shares {
         }
     } elsif (!defined $oldpath && defined $newpath) {
         # branch
-        my $info = $self->{file_shares_rev}->{$newpath};
-        undef $self->{file_shares_rev}->{$newpath};
+        my $info = delete $self->{file_shares_rev}->{$newpath};
 
         my $ary = $self->{file_shares}->{$info};
-        $self->{file_shares}->{$info} = grep ! /^\Q$info\E/, @$ary;
+        $self->{file_shares}->{$info} = grep {!/^\Q$info\E/} @$ary;
     }
 }
 
