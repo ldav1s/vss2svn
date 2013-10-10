@@ -188,7 +188,7 @@ sub _remove_keep {
     my $keep = File::Spec->catfile($keepdir, KEEP_FILE);
 
     if (-f $keep) {
-        $self->{repo}->command('rm', '-f', '--',  $keep);
+        $self->{repo}->command('rm', '-f', '-q', '--',  $keep);
     }
 }
 
@@ -501,14 +501,12 @@ sub _delete_handler {
     my($self, $itempath, $data, $expdir) = @_;
 
     my $tmppath;
+    my $parent;
     my @itemdir = $self->_append_repodir($itempath);
-    my $rm_type;
     if ($data->{itemtype} == 1) {
         $tmppath = File::Spec->catdir(@itemdir);
-        $rm_type = '-rf';
     } else {
         $tmppath = File::Spec->catfile(@itemdir);
-        $rm_type = '-f';
     }
 
     if (! -e $tmppath) {
@@ -518,11 +516,19 @@ sub _delete_handler {
         return 0;
     }
 
-    $self->{repo}->command('rm', $rm_type, '--',  $tmppath);
+    # git will remove the directory if the last file in the
+    # directory is removed.
+    $parent = dirname($tmppath);
+    $self->{repo}->command('rm', '-rf', '-q', '--',  $tmppath);
     $self->_update_file_shares($itempath, undef);
 
+    if (! -e $parent) {
+        # got nuked by rm
+        make_path($parent);
+    }
+
     # add back any needed keep files
-    $self->_add_keep_files(dirname($tmppath));
+    $self->_add_keep_files($parent);
 }  #  End _delete_handler
 
 ###############################################################################
