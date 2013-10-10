@@ -223,7 +223,7 @@ sub _add_handler {
                              . "adding missing "
                              . "parents");
 	}
-        $self->_make_path(($data->{itemtype} == 2) ? $tmpdir : $tmppath);
+        $self->_make_path($tmpdir);
     }
 
     if ($data->{itemtype} == 2
@@ -232,6 +232,8 @@ sub _add_handler {
         copy($expfile, $tmppath);
         $self->{repo}->command('add', '--',  $tmppath);
         $self->_remove_keep($tmpdir);
+    } elsif ($data->{itemtype} == 1) {
+        $self->_make_path($tmppath);
     }
 
 }  #  End _add_handler
