@@ -1,4 +1,4 @@
- package Vss2Svn::SvnRevHandler;
+package Vss2Svn::SvnRevHandler;
 
 use warnings;
 use strict;

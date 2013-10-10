@@ -41,6 +41,13 @@ use constant {
     TASK_DONE => 'DONE',
 };
 
+use constant {
+    TEMPDIR => '_vss2svn',
+    REPO => 'repo',
+    REVTIMERANGE => 3600,
+    ENCODING => 'windows-1252',
+};
+
 our(%gCfg, %gSth, %gErr, %gFh, $gSysOut, %gActionType, %gNameLookup, %gId);
 
 our $VERSION = '0.11.0-nightly.$LastChangedRevision$';
@@ -1753,8 +1760,7 @@ sub SetupGlobals {
     Vss2Svn::DataCache->SetDbHandle($gCfg{dbh});
     Vss2Svn::DataCache->SetVerbose($gCfg{verbose});
 
-    Vss2Svn::SvnRevHandler->SetRevTimeRange($gCfg{revtimerange})
-        if defined $gCfg{revtimerange};
+    Vss2Svn::SvnRevHandler->SetRevTimeRange($gCfg{revtimerange});
 
 }  #  End SetupGlobals
 
@@ -2031,11 +2037,12 @@ sub Initialize {
 
     &GiveHelp("Must specify --vssdir") if !defined($gCfg{vssdir});
     &GiveHelp("Must specify --author_info") if !defined($gCfg{author_info});
-    $gCfg{tempdir} = '_vss2svn' if !defined($gCfg{tempdir});
-    $gCfg{repo} = 'repo' if !defined($gCfg{repo});
+    $gCfg{tempdir} = TEMPDIR if !defined($gCfg{tempdir});
+    $gCfg{repo} = REPO if !defined($gCfg{repo});
     $gCfg{repo} = abs_path($gCfg{repo});
     $gCfg{vssdir} = abs_path($gCfg{vssdir});
     $gCfg{vssdatadir} = File::Spec->catdir($gCfg{vssdir}, 'data');
+    $gCfg{revtimerange} = REVTIMERANGE unless defined($gCfg{revtimerange});
 
     if (! -d $gCfg{repo}) {
         die "repo directory '$gCfg{repo}' is not a directory";
@@ -2054,7 +2061,7 @@ sub Initialize {
 
     # XML output from ssphysout placed here.
     $gCfg{ssphysout} = File::Spec->catfile($gCfg{tempdir}, 'ssphysout');
-    $gCfg{encoding} = 'windows-1252' if !defined($gCfg{encoding});
+    $gCfg{encoding} = ENCODING if !defined($gCfg{encoding});
 
     # Commit messages for SVN placed here.
     mkdir $gCfg{tempdir} unless (-d $gCfg{tempdir});
@@ -2213,20 +2220,20 @@ USAGE: perl vss2svn.pl --vssdir <dir> --author_info <file> [options]
 REQUIRED PARAMETERS:
     --vssdir <dir>  : Directory where VSS database is located. This should be
                       the directory in which the "srcsafe.ini" file is located.
-    --author_info <file>   : Tab separated file of <username> <author> <author_email> where <username> is a
-                        VSS username
+    --author_info <file>   : Tab separated file of <username> <author> <author_email>
+                             where <username> is a VSS username
 
 OPTIONAL PARAMETERS:
     --ssphys <path>   : Full path to ssphys.exe program; uses PATH otherwise
     --tempdir <dir>   : Temp directory to use during conversion;
-                        default is '_vss2svn'
+                        default is '@{[TEMPDIR]}'
     --repo <directory> : specify the git repo to use;
-                        default is 'repo'.  It is assumed that it has been
-                        initialized with 'git init' and contains appropriate
-                        settings files (e.g, .gitignore, .gitattributes, etc.).
-    --revtimerange <sec> : specify the difference between two ss actions
-                           that are treated as one subversion revision;
-                           default is 3600 seconds (== 1hour)
+                         default is '@{[REPO]}'.  It is assumed that it has been
+                         initialized with 'git init' and contains appropriate
+                         settings files (e.g, .gitignore, .gitattributes, etc.).
+    --revtimerange <sec> : specify the difference between two VSS actions
+                           that are treated as one git commit;
+                           default is @{[REVTIMERANGE]} seconds (== 1hour)
 
     --resume          : Resume a failed or aborted previous run
     --task <task>     : specify the task to resume; task is one of the following
@@ -2235,7 +2242,7 @@ $line
     --debug           : Print lots of debugging info.
     --timing          : Show timing information during various steps
     --encoding        : Specify the encoding used in VSS;
-                        Default is windows-1252
+                        Default is '@{[ENCODING]}'
 EOTXT
 
     exit(1);
