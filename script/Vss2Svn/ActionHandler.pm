@@ -723,7 +723,7 @@ sub _get_parent_path {
 
     # In a move szenario, we can have one deleted and one active parent. We
     # are only interested in the active ones here.
-    my @pathstoget = $self->_get_active_parents ($physname);
+    my @pathstoget = $self->_get_parents ($physname, \&_active_parents);
 
     # TODO: For projects there should be only one active parent
     my $parent = $pathstoget[0];
@@ -761,7 +761,7 @@ sub _get_current_item_paths {
 sub _get_vivid_item_paths {
     my($self, $mainonly) = @_;
     
-    my @parents = $self->_get_vivid_parents ($self->{row}->{physname});
+    my @parents = $self->_get_parents ($self->{row}->{physname}, \&_vivid_parents);
     return $self->_get_item_paths($self->{row}->{physname}, @parents);
 }  #  End _get_vivid_item_paths
 
@@ -771,7 +771,7 @@ sub _get_vivid_item_paths {
 sub _get_active_item_paths {
     my($self, $mainonly) = @_;
     
-    my @parents = $self->_get_active_parents ($self->{row}->{physname});
+    my @parents = $self->_get_parents ($self->{row}->{physname}, \&_active_parents);
     return $self->_get_item_paths($self->{row}->{physname}, @parents);
 }  #  End _get_active_item_paths
 
@@ -898,7 +898,7 @@ sub _track_item_paths {
 
         my $physinfo = $gPhysInfo{ $row->{physname} };
         
-        my @parents = $self->_get_active_parents ($row->{physname});
+        my @parents = $self->_get_parents ($row->{physname}, \&_active_parents);
         my $result;
 
 PARENT:
@@ -942,95 +942,37 @@ sub _track_item_path {
 
 
 ###############################################################################
-#  _get_vivid_parents
+#  _vivid_parents
 # This function returns all parents where the physical file is not deleted,
 # r all active projects. If a file is deleted, the file
 # does nor take place in any further rename activity, so it is
 # inactive.
 ###############################################################################
-sub _get_vivid_parents {
-    my($self, $physname) = @_;
+sub _vivid_parents {
+    my($parent) = @_;
 
-    my $physinfo = $gPhysInfo{$physname};
-
-    my @parents;
-    if (defined $physinfo) {
-
-PARENT:
-        foreach my $parentphys (@{$physinfo->{order}}) {
-
-            # skip orphaned parents
-#            if ($parentphys eq '99999999' ) {
-#                next PARENT;
-#            }
-
-            my $parent = $physinfo->{parents}->{$parentphys};
-            if (!defined $parent)
-            {
-                next PARENT;
-            }
-            
-            # skip deleted parents, since these parents do not
-            # participate in specific vss action
-            if (defined $parent->{deleted} ) {
-                next PARENT;
-            }
-
-            push @parents, $parentphys;
-        }
-    }
-    
-    return @parents
-}  # End _get_vivid_parents
+    return !(defined $parent->{deleted});
+}
 
 ###############################################################################
-#  _get_active_parents
+#  _active_parents
 # This function returns all parents where the physical file is not deleted
 # or pinned, or all active projects. If a file is pinned or deleted, the file
 # does nor take place in any further checkin or rename activity, so it is
 # inactive.
 ###############################################################################
-sub _get_active_parents {
-    my($self, $physname) = @_;
+sub _active_parents {
+    my($parent) = @_;
 
-    my $physinfo = $gPhysInfo{$physname};
-
-    my @parents;
-    if (defined $physinfo) {
-
-PARENT:
-        foreach my $parentphys (@{$physinfo->{order}}) {
-
-            # skip orphaned parents
-#            if ($parentphys eq '99999999' ) {
-#                next PARENT;
-#            }
-
-            my $parent = $physinfo->{parents}->{$parentphys};
-            if (!defined $parent)
-            {
-                next PARENT;
-            }
-            
-            # skip deleted or pinned parents, since these parents do not
-            # participate in any vss action
-            if (defined $parent->{deleted} || defined $parent->{pinned} ) {
-                next PARENT;
-            }
-
-            push @parents, $parentphys;
-        }
-    }
-    
-    return @parents
-}  # End _get_active_parents
+    return !(defined $parent->{deleted} || defined $parent->{pinned});
+}
 
 ###############################################################################
 #  _get_parents
 # This function returns all parents for the physical file
 ###############################################################################
 sub _get_parents {
-    my($self, $physname) = @_;
+    my($self, $physname, $pfilter) = @_;
 
     my $physinfo = $gPhysInfo{$physname};
 
@@ -1040,14 +982,8 @@ sub _get_parents {
 PARENT:
         foreach my $parentphys (@{$physinfo->{order}}) {
 
-            # skip orphaned parents
-#            if ($parentphys eq '99999999' ) {
-#                next PARENT;
-#            }
-
             my $parent = $physinfo->{parents}->{$parentphys};
-            if (!defined $parent)
-            {
+            if (!defined $parent || (defined $pfilter && !&$pfilter($parent))) {
                 next PARENT;
             }
             
