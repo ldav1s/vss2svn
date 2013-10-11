@@ -125,13 +125,12 @@ sub _add_handler {
         {
          type       => $row->{itemtype},
          name       => $row->{itemname},
-#         parentphys => $row->{parentphys},
-#         sharedphys => [],
          parents    => {},
          first_version => $version,
          last_version => $version,
          orphaned   => $orphaned,
          was_binary => $row->{is_binary},
+         order => [],
         };
 
     $self->_add_parent ($row->{physname}, $row->{parentphys});
@@ -140,8 +139,6 @@ sub _add_handler {
     # File was just created so no need to look for shares
     $self->{itempaths} = [$self->_get_current_item_path()];
 
-    # don't convert orphaned items
-#    return $orphaned ? 0 : 1;
     return 1;
 }  #  End _add_handler
 
@@ -476,6 +473,7 @@ sub _restore_handler {
          last_version => 1,
          orphaned   => 1,
          was_binary => $row->{is_binary},
+         order => [],
     };
     
     my $newName = $row->{info};
