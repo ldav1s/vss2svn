@@ -856,12 +856,8 @@ sub _get_item_paths {
 
 PARENT:
     foreach my $parent (@pathstoget) {
-        if (!defined $parent) {
-            next PARENT;
-        }
-        $result = $self->_get_parent_path($parent);
-
-        if(!defined($result)) {
+        if (!defined $parent
+            || !defined($result = $self->_get_parent_path($parent))) {
             next PARENT;
         }
 
