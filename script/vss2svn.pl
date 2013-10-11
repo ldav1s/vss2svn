@@ -391,7 +391,7 @@ VERSION:
 
         }
 
-        # we can have label actions and labes attached to versions
+        # we can have label actions and labels attached to versions
         if (defined $action->{Label} && !ref($action->{Label})) {
             $label = $action->{Label};
 
