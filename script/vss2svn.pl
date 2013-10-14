@@ -1813,7 +1813,7 @@ sub SetupActionTypes {
 #  InitSysTables
 ###############################################################################
 sub InitSysTables {
-    my($sql, $sth);
+    my($sql);
 
     $sql = <<"EOSQL";
 CREATE TABLE
@@ -1823,8 +1823,7 @@ CREATE TABLE
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
 CREATE TABLE
@@ -1834,8 +1833,7 @@ CREATE TABLE
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
 CREATE TABLE
@@ -1859,8 +1857,7 @@ CREATE TABLE
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
 CREATE INDEX
@@ -1871,8 +1868,7 @@ CREATE INDEX
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
 CREATE INDEX
@@ -1885,8 +1881,7 @@ CREATE INDEX
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
 CREATE TABLE
@@ -1903,8 +1898,7 @@ CREATE TABLE
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
 CREATE INDEX
@@ -1913,8 +1907,7 @@ CREATE INDEX
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
 CREATE TABLE
@@ -1926,8 +1919,7 @@ CREATE TABLE
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
 CREATE TABLE
@@ -1937,8 +1929,7 @@ CREATE TABLE
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
 CREATE INDEX
@@ -1948,8 +1939,7 @@ CREATE INDEX
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
 CREATE TABLE
@@ -1961,8 +1951,7 @@ CREATE TABLE
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     my @cfgitems = qw(task step vssdir svnurl svnuser svnpwd ssphys tempdir
         setsvndate starttime);
@@ -1977,11 +1966,10 @@ CREATE TABLE
     )
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute;
+    $gCfg{dbh}->do($sql);
 
     my $fields = join(', ', @cfgitems);
-    my $args = join(', ', map {'?'} @cfgitems);
+    my $args = join(', ', map {"'" . $_  . "'"} @cfgitems);
 
     $sql = <<"EOSQL";
 INSERT INTO
@@ -1990,9 +1978,7 @@ VALUES
     ($args)
 EOSQL
 
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute(map {$gCfg{$_}} @cfgitems);
-    $sth->finish();
+    $gCfg{dbh}->do($sql);
 
 }  #  End InitSysTables
 
