@@ -54,6 +54,23 @@ use constant {
     VSS_FILE => 2,
 };
 
+use constant {
+    ACTION_ADD => 'ADD',
+    ACTION_RESTOREDPROJECT => 'RESTOREDPROJECT',
+    ACTION_RENAME => 'RENAME',
+    ACTION_MOVE_TO => 'MOVE_TO',
+    ACTION_MOVE_FROM => 'MOVE_FROM',
+    ACTION_DELETE => 'DELETE',
+    ACTION_DESTROY => 'DESTROY',
+    ACTION_RECOVER => 'RECOVER',
+    ACTION_RESTORE => 'RESTORE',
+    ACTION_COMMIT => 'COMMIT',
+    ACTION_SHARE => 'SHARE',
+    ACTION_BRANCH => 'BRANCH',
+    ACTION_PIN => 'PIN',
+    ACTION_LABEL => 'LABEL',
+};
+
 our(%gCfg, %gSth, %gErr, $gSysOut, %gNameLookup);
 
 our $VERSION = '0.11.0-nightly.$LastChangedRevision$';
@@ -351,34 +368,34 @@ sub GetVssItemVersions {
     # the time of restoration. Timestamps of the child files retain
     # their original values.
     my %gActionType = (
-        CreatedProject => {type => VSS_PROJECT, action => 'ADD'},
-        AddedProject => {type => VSS_PROJECT, action => 'ADD'},
-        RestoredProject => {type => VSS_PROJECT, action => 'RESTOREDPROJECT'},
-        RenamedProject => {type => VSS_PROJECT, action => 'RENAME'},
-        MovedProjectTo => {type => VSS_PROJECT, action => 'MOVE_TO'},
-        MovedProjectFrom => {type => VSS_PROJECT, action => 'MOVE_FROM'},
-        DeletedProject => {type => VSS_PROJECT, action => 'DELETE'},
-        DestroyedProject => {type => VSS_PROJECT, action => 'DESTROY'},
-        RecoveredProject => {type => VSS_PROJECT, action => 'RECOVER'},
-        ArchiveProject => {type => VSS_PROJECT, action => 'DELETE'},
-        RestoredProject => {type => VSS_PROJECT, action => 'RESTORE'},
-        CheckedIn => {type => VSS_FILE, action => 'COMMIT'},
-        CreatedFile => {type => VSS_FILE, action => 'ADD'},
-        AddedFile => {type => VSS_FILE, action => 'ADD'},
-        RenamedFile => {type => VSS_FILE, action => 'RENAME'},
-        DeletedFile => {type => VSS_FILE, action => 'DELETE'},
-        DestroyedFile => {type => VSS_FILE, action => 'DESTROY'},
-        RecoveredFile => {type => VSS_FILE, action => 'RECOVER'},
-        ArchiveVersionsofFile => {type => VSS_FILE, action => 'ADD'},
-        ArchiveVersionsofProject => {type => VSS_PROJECT, action => 'ADD'},
-        ArchiveFile => {type => VSS_FILE, action => 'DELETE'},
-        RestoredFile => {type => VSS_FILE, action => 'RESTORE'},
-        SharedFile => {type => VSS_FILE, action => 'SHARE'},
-        BranchFile => {type => VSS_FILE, action => 'BRANCH'},
-        PinnedFile => {type => VSS_FILE, action => 'PIN'},
-        RollBack => {type => VSS_FILE, action => 'BRANCH'},
-        UnpinnedFile => {type => VSS_FILE, action => 'PIN'},
-        Labeled => {type => VSS_FILE, action => 'LABEL'},
+        CreatedProject => {type => VSS_PROJECT, action => ACTION_ADD},
+        AddedProject => {type => VSS_PROJECT, action => ACTION_ADD},
+        RestoredProject => {type => VSS_PROJECT, action => ACTION_RESTOREDPROJECT},
+        RenamedProject => {type => VSS_PROJECT, action => ACTION_RENAME},
+        MovedProjectTo => {type => VSS_PROJECT, action => ACTION_MOVE_TO},
+        MovedProjectFrom => {type => VSS_PROJECT, action => ACTION_MOVE_FROM},
+        DeletedProject => {type => VSS_PROJECT, action => ACTION_DELETE},
+        DestroyedProject => {type => VSS_PROJECT, action => ACTION_DESTROY},
+        RecoveredProject => {type => VSS_PROJECT, action => ACTION_RECOVER},
+        ArchiveProject => {type => VSS_PROJECT, action => ACTION_DELETE},
+        RestoredProject => {type => VSS_PROJECT, action => ACTION_RESTORE},
+        CheckedIn => {type => VSS_FILE, action => ACTION_COMMIT},
+        CreatedFile => {type => VSS_FILE, action => ACTION_ADD},
+        AddedFile => {type => VSS_FILE, action => ACTION_ADD},
+        RenamedFile => {type => VSS_FILE, action => ACTION_RENAME},
+        DeletedFile => {type => VSS_FILE, action => ACTION_DELETE},
+        DestroyedFile => {type => VSS_FILE, action => ACTION_DESTROY},
+        RecoveredFile => {type => VSS_FILE, action => ACTION_RECOVER},
+        ArchiveVersionsofFile => {type => VSS_FILE, action => ACTION_ADD},
+        ArchiveVersionsofProject => {type => VSS_PROJECT, action => ACTION_ADD},
+        ArchiveFile => {type => VSS_FILE, action => ACTION_DELETE},
+        RestoredFile => {type => VSS_FILE, action => ACTION_RESTORE},
+        SharedFile => {type => VSS_FILE, action => ACTION_SHARE},
+        BranchFile => {type => VSS_FILE, action => ACTION_BRANCH},
+        PinnedFile => {type => VSS_FILE, action => ACTION_PIN},
+        RollBack => {type => VSS_FILE, action => ACTION_BRANCH},
+        UnpinnedFile => {type => VSS_FILE, action => ACTION_PIN},
+        Labeled => {type => VSS_FILE, action => ACTION_LABEL},
         );
 
 VERSION:
@@ -431,7 +448,7 @@ VERSION:
 
         # In case of Label the itemtype is the type of the item currently
         # under investigation
-        if ($actiontype eq 'LABEL') {
+        if ($actiontype eq ACTION_LABEL) {
             my $iteminfo = $xml->{ItemInfo};
             $itemtype = $iteminfo->{Type};
 
@@ -492,10 +509,10 @@ VERSION:
             $is_binary = $xml->{ItemInfo}->{Binary};
         }
 
-        if ($actiontype eq 'RENAME') {
+        if ($actiontype eq ACTION_RENAME) {
             # if a rename, we store the new name in the action's 'info' field
             $info = &GetItemName($action->{NewSSName});
-        } elsif ($actiontype eq 'BRANCH') {
+        } elsif ($actiontype eq ACTION_BRANCH) {
             $info = $action->{Parent};
         }
 
@@ -510,10 +527,10 @@ VERSION:
         $info = $action->{UnpinnedFromVersion} if (defined $action->{UnpinnedFromVersion});
 
         for ($actiontype) {
-            when ('ADD') { $priority -= 4; }
-            when ('SHARE') { $priority -= 3; }
-            when ('PIN') { $priority -= 3; }
-            when ('BRANCH') { $priority -= 2; }
+            when (ACTION_ADD) { $priority -= 4; }
+            when (ACTION_SHARE) { $priority -= 3; }
+            when (ACTION_PIN) { $priority -= 3; }
+            when (ACTION_BRANCH) { $priority -= 2; }
         }
 
         # store the reversed physname as a sortkey; a bit wasteful but makes
@@ -530,7 +547,7 @@ VERSION:
         # version where the actiontype was LABEL. But ssphys will report the
         # same label twice. Therefore filter the Labeling versions here.
         if (defined $version->{Label} && !ref($version->{Label})
-            && $actiontype ne 'LABEL') {
+            && $actiontype ne ACTION_LABEL) {
             my ($labelComment);
 
             if ($version->{LabelComment} && !ref($version->{LabelComment})) {
@@ -539,7 +556,7 @@ VERSION:
             else {
                 $labelComment = "assigned label '$version->{Label}' to version $vernum of physical file '$tphysname'";
             }
-            $cache->add($tphysname, $vernum, $parentphys, 'LABEL', $itemname,
+            $cache->add($tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
                         $itemtype, $timestamp, $user, $is_binary, $info, 5,
                         $sortkey, $parentdata, $version->{Label}, $labelComment);
         }
@@ -785,7 +802,7 @@ sub MergeMoveData {
     my($sth, $rows, $row);
 
     $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalAction '
-                               . 'WHERE actiontype = "MOVE_FROM"');
+                               . "WHERE actiontype = '" . ACTION_MOVE_FROM . "'");
     $sth->execute();
 
     # need to pull in all recs at once, since we'll be updating/deleting data
@@ -794,7 +811,7 @@ sub MergeMoveData {
     my($childrecs, $child, $id);
 
     foreach $row (@$rows) {
-        $row->{actiontype} = 'MOVE_TO';
+        $row->{actiontype} = ACTION_MOVE_TO;
         $childrecs = &GetChildRecs($row, 1);
 
         my $source = undef;
@@ -832,13 +849,13 @@ EOSQL
             $update->execute( $target, $source, $row->{action_id});
         } else {
             #the record did not have a matching MOVE_TO. call it a RESTORE
-            print "Changing $row->{action_id} to a RESTORE\n";
+            print "Changing $row->{action_id} to a @{[ACTION_RESTORE]}\n";
 
             my $sql = <<"EOSQL";
 UPDATE
     PhysicalAction
 SET
-    actiontype = 'RESTORE'
+    actiontype = '@{[ACTION_RESTORE]}'
 WHERE
     action_id = ?
 EOSQL
@@ -852,7 +869,7 @@ EOSQL
 
     # change all remaining MOVE_TO records into MOVE records and swap the src and target
     $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalAction '
-                               . 'WHERE actiontype = "MOVE_TO"');
+                               . "WHERE actiontype = '" . ACTION_MOVE_TO . "'");
     $sth->execute();
     $rows = $sth->fetchall_arrayref( {} );
 
@@ -866,7 +883,7 @@ EOSQL
         $update->execute($row->{info}, $row->{parentphys}, $row->{action_id});
     }
 
-    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalAction WHERE actiontype = "RESTORE"');
+    $sth = $gCfg{dbh}->prepare("SELECT * FROM PhysicalAction WHERE actiontype = '" . ACTION_RESTORE . "'");
     $sth->execute();
     $rows = $sth->fetchall_arrayref( {} );
 
@@ -898,7 +915,7 @@ sub RemoveTemporaryCheckIns {
     my($sth, $rows, $row);
     $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalAction '
                                . 'WHERE comment = "Temporary file created by Visual Studio .NET to detect Microsoft Visual SourceSafe capabilities."'
-                               . '      AND actiontype = "ADD"'
+                               . "      AND actiontype = '" . ACTION_ADD . "'"
                                . '      AND itemtype = ' . VSS_FILE);		# only delete files, not projects
     $sth->execute();
 
@@ -953,14 +970,14 @@ sub MergeUnpinPinData {
     for $r (0 .. @$rows-2) {
         $row = $rows->[$r];
 
-        if ($row->{actiontype} eq 'PIN' && !defined $row->{version}) # UNPIN
+        if ($row->{actiontype} eq ACTION_PIN && !defined $row->{version}) # UNPIN
         {
             # Search for a matching pin action
             my $u;
             for ($u = $r+1; $u <= @$rows-2; $u++) {
                 $next_row = $rows->[$u];
 
-                if (   $next_row->{actiontype} eq 'PIN'
+                if (   $next_row->{actiontype} eq ACTION_PIN
                     && defined $next_row->{version}   # PIN
                     && $row->{physname} eq $next_row->{physname}
                     && $row->{parentphys} eq $next_row->{parentphys}
@@ -982,7 +999,7 @@ sub MergeUnpinPinData {
                     }
 
                 # if the next action is anything else than a pin stop the search
-                $u = @$rows if ($next_row->{actiontype} ne 'PIN' );
+                $u = @$rows if ($next_row->{actiontype} ne ACTION_PIN );
             }
         }
     }
@@ -1002,7 +1019,7 @@ sub MergeUnpinPinData {
 ###############################################################################
 sub BuildComments {
     my($sth, $rows, $row, $r, $next_row);
-    my $sql = 'SELECT * FROM PhysicalAction WHERE actiontype="PIN" AND itemtype=' . VSS_FILE . ' ORDER BY physname ASC';
+    my $sql = "SELECT * FROM PhysicalAction WHERE actiontype='@{[ACTION_PIN]}' AND itemtype=@{[VSS_FILE]} ORDER BY physname ASC";
     $sth = $gCfg{dbh}->prepare($sql);
     $sth->execute();
 
@@ -1167,7 +1184,7 @@ ROW:
         $itempaths = $handler->{itempaths};
 
         # In cases of a corrupted share source, the handler may change the
-        # action from 'SHARE' to 'ADD'
+        # action from ACTION_SHARE to ACTION_ADD
         $row->{actiontype} = $handler->{action};
 
         if (!defined $itempaths) {
@@ -1177,8 +1194,8 @@ ROW:
 
             # If we were adding or modifying a file, commit it to lost+found;
             # otherwise give up on it
-            if ($row->{itemtype} == VSS_FILE && ($row->{actiontype} eq 'ADD' ||
-                $row->{actiontype} eq 'COMMIT')) {
+            if ($row->{itemtype} == VSS_FILE && ($row->{actiontype} eq ACTION_ADD ||
+                $row->{actiontype} eq ACTION_COMMIT)) {
 
                 $itempaths = [undef];
             } else {
@@ -1235,13 +1252,13 @@ sub CheckForDestroy {
     # search and see if it was DESTROYed first
     $row = $gCfg{dbh}->selectrow_arrayref("SELECT action_id FROM PhysicalAction "
                                           . "WHERE physname = ? AND "
-                                          . "actiontype = 'DESTROY'",
+                                          . "actiontype = '" . ACTION_DESTROY . "'",
                                           undef, $physname);
 
     if (!$destroyonly) {
         $rowd = $gCfg{dbh}->selectrow_arrayref("SELECT action_id FROM PhysicalAction "
                                                . "WHERE physname = ? AND "
-                                               . "actiontype = 'DELETE'",
+                                               . "actiontype = '" . ACTION_DELETE . "'",
                                                undef, $physname);
     }
 
@@ -1323,8 +1340,8 @@ ACTION:
 
             my $version = $action->{version};
             if (   !defined $version
-                   && (   $action->{action} eq 'ADD'
-                          || $action->{action} eq 'COMMIT')) {
+                   && (   $action->{action} eq ACTION_ADD
+                          || $action->{action} eq ACTION_COMMIT)) {
                 &ThrowWarning("'$physname': no version specified for retrieval");
 
                 # fall through and try with version 1.
@@ -1332,7 +1349,7 @@ ACTION:
             }
 
             if ($itemtype == VSS_FILE && defined $version) {
-                if ($action->{action} eq 'RENAME') {
+                if ($action->{action} eq ACTION_RENAME) {
                     # version is wrong, step back to the previous action_id version
                     $rename_sth->execute($physname, $action->{action_id});
                     $version = $rename_sth->fetchall_arrayref()->[0][0];
