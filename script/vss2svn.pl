@@ -46,6 +46,8 @@ use constant {
     REPO => 'repo',
     REVTIMERANGE => 3600,
     ENCODING => 'windows-1252',
+    VSS_PROJECT => 1,
+    VSS_FILE => 2,
 };
 
 our(%gCfg, %gSth, %gErr, %gFh, $gSysOut, %gActionType, %gNameLookup, %gId);
@@ -296,10 +298,10 @@ sub GetVssPhysInfo {
         return;
     }
 
-    if ($iteminfo->{Type} == 1) {
+    if ($iteminfo->{Type} == VSS_PROJECT) {
         $parentphys = (uc($physname) eq Vss2Svn::ActionHandler::VSSDB_ROOT)?
             '' : &GetProjectParent($xml);
-    } elsif ($iteminfo->{Type} == 2) {
+    } elsif ($iteminfo->{Type} == VSS_FILE) {
         $parentphys = undef;
     } else {
         &ThrowWarning("Can't handle file '$physname'; not a project or file\n");
@@ -413,7 +415,7 @@ VERSION:
             $comment =~ s/\s+$//s;
         }
 
-        if ($itemtype == 1 && uc($physname) eq Vss2Svn::ActionHandler::VSSDB_ROOT
+        if ($itemtype == VSS_PROJECT && uc($physname) eq Vss2Svn::ActionHandler::VSSDB_ROOT
             && ref($tphysname)) {
 
             $tphysname = $physname;
@@ -443,7 +445,7 @@ VERSION:
 #            $parentphys = undef;
         }
 
-        if ($itemtype == 1) {
+        if ($itemtype == VSS_PROJECT) {
             $itemname .= '/';
         } elsif (defined($xml->{ItemInfo}) &&
             defined($xml->{ItemInfo}->{Binary}) &&
@@ -457,7 +459,7 @@ VERSION:
 
             $info = &GetItemName($action->{NewSSName});
 
-            if ($itemtype == 1) {
+            if ($itemtype == VSS_PROJECT) {
                 $info .= '/';
             }
         } elsif ($actiontype eq 'BRANCH') {
@@ -867,7 +869,7 @@ sub RemoveTemporaryCheckIns {
     $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalAction '
                                . 'WHERE comment = "Temporary file created by Visual Studio .NET to detect Microsoft Visual SourceSafe capabilities."'
                                . '      AND actiontype = "ADD"'
-                               . '      AND itemtype = 2');		# only delete files, not projects
+                               . '      AND itemtype = ' . VSS_FILE);		# only delete files, not projects
     $sth->execute();
 
     # need to pull in all recs at once, since we'll be updating/deleting data
@@ -970,7 +972,7 @@ sub MergeUnpinPinData {
 ###############################################################################
 sub BuildComments {
     my($sth, $rows, $row, $r, $next_row);
-    my $sql = 'SELECT * FROM PhysicalAction WHERE actiontype="PIN" AND itemtype=2 ORDER BY physname ASC';
+    my $sql = 'SELECT * FROM PhysicalAction WHERE actiontype="PIN" AND itemtype=' . VSS_FILE . ' ORDER BY physname ASC';
     $sth = $gCfg{dbh}->prepare($sql);
     $sth->execute();
 
@@ -997,7 +999,7 @@ sub BuildComments {
             $sql2 = 'SELECT * FROM PhysicalAction'
                     . ' WHERE physname="' . $row->{physname} . '"'
                     . '      AND parentphys ISNULL'
-                    . '      AND itemtype=2'
+                    . '      AND itemtype=' . VSS_FILE
                     . '      AND version>=' . $row->{version}
                     . '      AND timestamp<=' . $row->{timestamp}
                     . ' ORDER BY version DESC';
@@ -1010,7 +1012,7 @@ sub BuildComments {
             $sql2 = 'SELECT * FROM PhysicalAction'
                     . ' WHERE physname="' .  $row->{physname} . '"'
                     . '      AND parentphys ISNULL'
-                    . '      AND itemtype=2'
+                    . '      AND itemtype=' . VSS_FILE
                     . '      AND timestamp<=' . $row->{timestamp}
                     . '      AND version>' . $row->{info}
                     . ' ORDER BY version ASC';
@@ -1022,7 +1024,7 @@ sub BuildComments {
             $sql2 = 'SELECT * FROM PhysicalAction'
                     . ' WHERE physname="' . $row->{physname} . '"'
                     . '      AND parentphys ISNULL'
-                    . '      AND itemtype=2'
+                    . '      AND itemtype=' . VSS_FILE
                     . '      AND version>' . $row->{info}
                     . '      AND version<=' . $row->{version}
                     . ' ORDER BY version ';
@@ -1145,7 +1147,7 @@ ROW:
 
             # If we were adding or modifying a file, commit it to lost+found;
             # otherwise give up on it
-            if ($row->{itemtype} == 2 && ($row->{actiontype} eq 'ADD' ||
+            if ($row->{itemtype} == VSS_FILE && ($row->{actiontype} eq 'ADD' ||
                 $row->{actiontype} eq 'COMMIT')) {
 
                 $itempaths = [undef];
@@ -1299,7 +1301,7 @@ ACTION:
                 $version = 1;
             }
 
-            if ($itemtype == 2 && defined $version) {
+            if ($itemtype == VSS_FILE && defined $version) {
                 if ($action->{action} eq 'RENAME') {
                     # version is wrong, step back to the previous action_id version
                     $rename_sth->execute($physname, $action->{action_id});
@@ -1777,34 +1779,34 @@ sub SetupActionTypes {
     # the time of restoration. Timestamps of the child files retain
     # their original values.
     %gActionType = (
-        CreatedProject => {type => 1, action => 'ADD'},
-        AddedProject => {type => 1, action => 'ADD'},
-        RestoredProject => {type => 1, action => 'RESTOREDPROJECT'},
-        RenamedProject => {type => 1, action => 'RENAME'},
-        MovedProjectTo => {type => 1, action => 'MOVE_TO'},
-        MovedProjectFrom => {type => 1, action => 'MOVE_FROM'},
-        DeletedProject => {type => 1, action => 'DELETE'},
-        DestroyedProject => {type => 1, action => 'DESTROY'},
-        RecoveredProject => {type => 1, action => 'RECOVER'},
-        ArchiveProject => {type => 1, action => 'DELETE'},
-        RestoredProject => {type => 1, action => 'RESTORE'},
-        CheckedIn => {type => 2, action => 'COMMIT'},
-        CreatedFile => {type => 2, action => 'ADD'},
-        AddedFile => {type => 2, action => 'ADD'},
-        RenamedFile => {type => 2, action => 'RENAME'},
-        DeletedFile => {type => 2, action => 'DELETE'},
-        DestroyedFile => {type => 2, action => 'DESTROY'},
-        RecoveredFile => {type => 2, action => 'RECOVER'},
-        ArchiveVersionsofFile => {type => 2, action => 'ADD'},
-    ArchiveVersionsofProject => {type => 1, action => 'ADD'},
-        ArchiveFile => {type => 2, action => 'DELETE'},
-        RestoredFile => {type => 2, action => 'RESTORE'},
-        SharedFile => {type => 2, action => 'SHARE'},
-        BranchFile => {type => 2, action => 'BRANCH'},
-        PinnedFile => {type => 2, action => 'PIN'},
-        RollBack => {type => 2, action => 'BRANCH'},
-        UnpinnedFile => {type => 2, action => 'PIN'},
-        Labeled => {type => 2, action => 'LABEL'},
+        CreatedProject => {type => VSS_PROJECT, action => 'ADD'},
+        AddedProject => {type => VSS_PROJECT, action => 'ADD'},
+        RestoredProject => {type => VSS_PROJECT, action => 'RESTOREDPROJECT'},
+        RenamedProject => {type => VSS_PROJECT, action => 'RENAME'},
+        MovedProjectTo => {type => VSS_PROJECT, action => 'MOVE_TO'},
+        MovedProjectFrom => {type => VSS_PROJECT, action => 'MOVE_FROM'},
+        DeletedProject => {type => VSS_PROJECT, action => 'DELETE'},
+        DestroyedProject => {type => VSS_PROJECT, action => 'DESTROY'},
+        RecoveredProject => {type => VSS_PROJECT, action => 'RECOVER'},
+        ArchiveProject => {type => VSS_PROJECT, action => 'DELETE'},
+        RestoredProject => {type => VSS_PROJECT, action => 'RESTORE'},
+        CheckedIn => {type => VSS_FILE, action => 'COMMIT'},
+        CreatedFile => {type => VSS_FILE, action => 'ADD'},
+        AddedFile => {type => VSS_FILE, action => 'ADD'},
+        RenamedFile => {type => VSS_FILE, action => 'RENAME'},
+        DeletedFile => {type => VSS_FILE, action => 'DELETE'},
+        DestroyedFile => {type => VSS_FILE, action => 'DESTROY'},
+        RecoveredFile => {type => VSS_FILE, action => 'RECOVER'},
+        ArchiveVersionsofFile => {type => VSS_FILE, action => 'ADD'},
+    ArchiveVersionsofProject => {type => VSS_PROJECT, action => 'ADD'},
+        ArchiveFile => {type => VSS_FILE, action => 'DELETE'},
+        RestoredFile => {type => VSS_FILE, action => 'RESTORE'},
+        SharedFile => {type => VSS_FILE, action => 'SHARE'},
+        BranchFile => {type => VSS_FILE, action => 'BRANCH'},
+        PinnedFile => {type => VSS_FILE, action => 'PIN'},
+        RollBack => {type => VSS_FILE, action => 'BRANCH'},
+        UnpinnedFile => {type => VSS_FILE, action => 'PIN'},
+        Labeled => {type => VSS_FILE, action => 'LABEL'},
     );
 
 }  #  End SetupActionTypes
