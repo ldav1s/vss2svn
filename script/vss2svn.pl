@@ -54,7 +54,7 @@ use constant {
     VSS_FILE => 2,
 };
 
-our(%gCfg, %gSth, %gErr, %gFh, $gSysOut, %gActionType, %gNameLookup, %gId);
+our(%gCfg, %gSth, %gErr, $gSysOut, %gNameLookup);
 
 our $VERSION = '0.11.0-nightly.$LastChangedRevision$';
 $VERSION =~ s/\$.*?(\d+).*\$/$1/; # get only the number out of the svn revision
@@ -342,6 +342,44 @@ sub GetVssItemVersions {
        $is_binary, $info, $priority, $sortkey, $label, $cachename);
 
     my $last_timestamp = 0;
+    # RollBack is only seen in combiation with a BranchFile activity, so actually
+    # RollBack is the item view on the activity and BranchFile is the parent side
+    # ==> map RollBack to BRANCH, so that we can join the two actions in the
+    # MergeParentData step
+    # RestoredProject seems to act like CreatedProject, except that the
+    # project was recreated from an archive file, and its timestamp is
+    # the time of restoration. Timestamps of the child files retain
+    # their original values.
+    my %gActionType = (
+        CreatedProject => {type => VSS_PROJECT, action => 'ADD'},
+        AddedProject => {type => VSS_PROJECT, action => 'ADD'},
+        RestoredProject => {type => VSS_PROJECT, action => 'RESTOREDPROJECT'},
+        RenamedProject => {type => VSS_PROJECT, action => 'RENAME'},
+        MovedProjectTo => {type => VSS_PROJECT, action => 'MOVE_TO'},
+        MovedProjectFrom => {type => VSS_PROJECT, action => 'MOVE_FROM'},
+        DeletedProject => {type => VSS_PROJECT, action => 'DELETE'},
+        DestroyedProject => {type => VSS_PROJECT, action => 'DESTROY'},
+        RecoveredProject => {type => VSS_PROJECT, action => 'RECOVER'},
+        ArchiveProject => {type => VSS_PROJECT, action => 'DELETE'},
+        RestoredProject => {type => VSS_PROJECT, action => 'RESTORE'},
+        CheckedIn => {type => VSS_FILE, action => 'COMMIT'},
+        CreatedFile => {type => VSS_FILE, action => 'ADD'},
+        AddedFile => {type => VSS_FILE, action => 'ADD'},
+        RenamedFile => {type => VSS_FILE, action => 'RENAME'},
+        DeletedFile => {type => VSS_FILE, action => 'DELETE'},
+        DestroyedFile => {type => VSS_FILE, action => 'DESTROY'},
+        RecoveredFile => {type => VSS_FILE, action => 'RECOVER'},
+        ArchiveVersionsofFile => {type => VSS_FILE, action => 'ADD'},
+        ArchiveVersionsofProject => {type => VSS_PROJECT, action => 'ADD'},
+        ArchiveFile => {type => VSS_FILE, action => 'DELETE'},
+        RestoredFile => {type => VSS_FILE, action => 'RESTORE'},
+        SharedFile => {type => VSS_FILE, action => 'SHARE'},
+        BranchFile => {type => VSS_FILE, action => 'BRANCH'},
+        PinnedFile => {type => VSS_FILE, action => 'PIN'},
+        RollBack => {type => VSS_FILE, action => 'BRANCH'},
+        UnpinnedFile => {type => VSS_FILE, action => 'PIN'},
+        Labeled => {type => VSS_FILE, action => 'LABEL'},
+        );
 
 VERSION:
     foreach $version (@{ $xml->{Version} }) {
@@ -447,42 +485,26 @@ VERSION:
             # actually this (project) item
 
             $parentphys = $physname;
-        } else {
-#            $parentphys = undef;
         }
 
-        if ($itemtype == VSS_PROJECT) {
-            $itemname .= '/';
-        } elsif (defined($xml->{ItemInfo}) &&
-            defined($xml->{ItemInfo}->{Binary}) &&
-            $xml->{ItemInfo}->{Binary}) {
-
-            $is_binary = 1;
+        if ($itemtype == VSS_FILE && defined($xml->{ItemInfo})
+            && defined($xml->{ItemInfo}->{Binary})) {
+            $is_binary = $xml->{ItemInfo}->{Binary};
         }
 
         if ($actiontype eq 'RENAME') {
             # if a rename, we store the new name in the action's 'info' field
-
             $info = &GetItemName($action->{NewSSName});
-
-            if ($itemtype == VSS_PROJECT) {
-                $info .= '/';
-            }
         } elsif ($actiontype eq 'BRANCH') {
             $info = $action->{Parent};
         }
 
-# Not having version info around, even if we don't have a parent is a mistake
-# I think.  Should have it in case this is later RESTOREd
-#        $vernum = ($parentdata)? undef : $version->{VersionNumber};
         $vernum = $version->{VersionNumber};
 
         # since there is no corresponding client action for PIN, we need to
         # enter the concrete version number here manually
         # In a share action the pinnedToVersion attribute can also be set
-#        if ($actiontype eq 'PIN') {
-            $vernum = $action->{PinnedToVersion} if (defined $action->{PinnedToVersion});
-#        }
+        $vernum = $action->{PinnedToVersion} if (defined $action->{PinnedToVersion});
 
         # for unpin actions also remeber the unpinned version
         $info = $action->{UnpinnedFromVersion} if (defined $action->{UnpinnedFromVersion});
@@ -1764,8 +1786,6 @@ sub SetupGlobals {
 
     $gCfg{ssphys} = 'ssphys' if !defined($gCfg{ssphys});
 
-    &SetupActionTypes;
-
     Vss2Svn::DataCache->SetCacheDir($gCfg{tempdir});
     Vss2Svn::DataCache->SetDbHandle($gCfg{dbh});
     Vss2Svn::DataCache->SetVerbose($gCfg{verbose});
@@ -1773,51 +1793,6 @@ sub SetupGlobals {
     Vss2Svn::SvnRevHandler->SetRevTimeRange($gCfg{revtimerange});
 
 }  #  End SetupGlobals
-
-###############################################################################
-#  SetupActionTypes
-###############################################################################
-sub SetupActionTypes {
-    # RollBack is only seen in combiation with a BranchFile activity, so actually
-    # RollBack is the item view on the activity and BranchFile is the parent side
-    # ==> map RollBack to BRANCH, so that we can join the two actions in the
-    # MergeParentData step
-    # RestoredProject seems to act like CreatedProject, except that the
-    # project was recreated from an archive file, and its timestamp is
-    # the time of restoration. Timestamps of the child files retain
-    # their original values.
-    %gActionType = (
-        CreatedProject => {type => VSS_PROJECT, action => 'ADD'},
-        AddedProject => {type => VSS_PROJECT, action => 'ADD'},
-        RestoredProject => {type => VSS_PROJECT, action => 'RESTOREDPROJECT'},
-        RenamedProject => {type => VSS_PROJECT, action => 'RENAME'},
-        MovedProjectTo => {type => VSS_PROJECT, action => 'MOVE_TO'},
-        MovedProjectFrom => {type => VSS_PROJECT, action => 'MOVE_FROM'},
-        DeletedProject => {type => VSS_PROJECT, action => 'DELETE'},
-        DestroyedProject => {type => VSS_PROJECT, action => 'DESTROY'},
-        RecoveredProject => {type => VSS_PROJECT, action => 'RECOVER'},
-        ArchiveProject => {type => VSS_PROJECT, action => 'DELETE'},
-        RestoredProject => {type => VSS_PROJECT, action => 'RESTORE'},
-        CheckedIn => {type => VSS_FILE, action => 'COMMIT'},
-        CreatedFile => {type => VSS_FILE, action => 'ADD'},
-        AddedFile => {type => VSS_FILE, action => 'ADD'},
-        RenamedFile => {type => VSS_FILE, action => 'RENAME'},
-        DeletedFile => {type => VSS_FILE, action => 'DELETE'},
-        DestroyedFile => {type => VSS_FILE, action => 'DESTROY'},
-        RecoveredFile => {type => VSS_FILE, action => 'RECOVER'},
-        ArchiveVersionsofFile => {type => VSS_FILE, action => 'ADD'},
-    ArchiveVersionsofProject => {type => VSS_PROJECT, action => 'ADD'},
-        ArchiveFile => {type => VSS_FILE, action => 'DELETE'},
-        RestoredFile => {type => VSS_FILE, action => 'RESTORE'},
-        SharedFile => {type => VSS_FILE, action => 'SHARE'},
-        BranchFile => {type => VSS_FILE, action => 'BRANCH'},
-        PinnedFile => {type => VSS_FILE, action => 'PIN'},
-        RollBack => {type => VSS_FILE, action => 'BRANCH'},
-        UnpinnedFile => {type => VSS_FILE, action => 'PIN'},
-        Labeled => {type => VSS_FILE, action => 'LABEL'},
-    );
-
-}  #  End SetupActionTypes
 
 ###############################################################################
 #  InitSysTables
