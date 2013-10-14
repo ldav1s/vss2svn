@@ -3,6 +3,10 @@
 use warnings;
 use strict;
 
+use v5.10.1;
+
+use feature "switch";
+
 use Cwd 'abs_path';
 use Getopt::Long;
 use DBI;
@@ -298,14 +302,16 @@ sub GetVssPhysInfo {
         return;
     }
 
-    if ($iteminfo->{Type} == VSS_PROJECT) {
-        $parentphys = (uc($physname) eq Vss2Svn::ActionHandler::VSSDB_ROOT)?
-            '' : &GetProjectParent($xml);
-    } elsif ($iteminfo->{Type} == VSS_FILE) {
-        $parentphys = undef;
-    } else {
-        &ThrowWarning("Can't handle file '$physname'; not a project or file\n");
-        return;
+    for ($iteminfo->{Type}) {
+        when (VSS_PROJECT) {
+            $parentphys = (uc($physname) eq Vss2Svn::ActionHandler::VSSDB_ROOT)?
+                '' : &GetProjectParent($xml);
+        }
+        when (VSS_FILE) { $parentphys = undef; }
+        default {
+            &ThrowWarning("Can't handle file '$physname'; not a project or file\n");
+            return;
+        }
     }
 
     &GetVssItemVersions($cache, $physname, $parentphys, $xml);
@@ -481,10 +487,12 @@ VERSION:
         # for unpin actions also remeber the unpinned version
         $info = $action->{UnpinnedFromVersion} if (defined $action->{UnpinnedFromVersion});
 
-        $priority -= 4 if $actiontype eq 'ADD'; # Adds are always first
-        $priority -= 3 if $actiontype eq 'SHARE';
-        $priority -= 3 if $actiontype eq 'PIN';
-        $priority -= 2 if $actiontype eq 'BRANCH';
+        for ($actiontype) {
+            when ('ADD') { $priority -= 4; }
+            when ('SHARE') { $priority -= 3; }
+            when ('PIN') { $priority -= 3; }
+            when ('BRANCH') { $priority -= 2; }
+        }
 
         # store the reversed physname as a sortkey; a bit wasteful but makes
         # debugging easier for the time being...
