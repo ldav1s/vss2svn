@@ -6,19 +6,23 @@ use strict;
 use v5.10.1;
 
 use feature "switch";
+use feature "state";
 
 use Cwd 'abs_path';
 use Getopt::Long;
 use DBI;
 use DBD::SQLite2;
 use XML::Simple;
-use File::Find;
-use File::Path;
+use File::Basename;
 use File::Copy;
+use File::Find;
+use File::Path qw(make_path remove_tree);
 use File::Spec;
 use IPC::Run qw( run );
 use Time::CTime;
 use Benchmark ':hireswallclock';
+use Fcntl ':mode';
+use Storable qw(dclone);
 
 use lib '.';
 use Vss2Svn::ActionHandler;
@@ -27,6 +31,7 @@ use Vss2Svn::SvnRevHandler;
 use Vss2Svn::GitRepo;
 use POSIX;
 use Git;
+use Data::Dumper;
 
 require Encode;
 
@@ -41,6 +46,7 @@ use constant {
     TASK_MERGEUNPINPIN => 'MERGEUNPINPIN',
     TASK_BUILDCOMMENTS => 'BUILDCOMMENTS',
     TASK_BUILDACTIONHIST => 'BUILDACTIONHIST',
+    TASK_GITREAD => 'GITREAD',
     TASK_IMPORTGIT => 'IMPORTGIT',
     TASK_DONE => 'DONE',
 };
@@ -52,6 +58,7 @@ use constant {
     ENCODING => 'windows-1252',
     VSS_PROJECT => 1,
     VSS_FILE => 2,
+    BRANCH_TMP_FILE => '.vss2svn2gitbranchtmp',
 };
 
 use constant {
@@ -75,6 +82,9 @@ our(%gCfg, %gSth, %gErr, $gSysOut, %gNameLookup);
 
 our $VERSION = '0.11.0-nightly.$LastChangedRevision$';
 $VERSION =~ s/\$.*?(\d+).*\$/$1/; # get only the number out of the svn revision
+
+my %git_image = ();
+my %image_name = ();
 
 # store a hash of actions to take; allows restarting in case of failed
 # migration
@@ -102,42 +112,49 @@ my @joblist =
          task => TASK_GETPHYSHIST,
          handler => \&GetPhysVssHistory,
      },
-     # Merge data from parent records into child records where possible
+     # Initialize the git repo and a few in memory structures
      {
-         task => TASK_MERGEPARENTDATA,
-         handler => \&MergeParentData,
+         task => TASK_GITREAD,
+         handler => \&GitReadImage,
      },
-     # Merge data from move actions
-     {
-         task => TASK_MERGEMOVEDATA,
-         handler => \&MergeMoveData,
-     },
-     # Remove temporary check ins
-     {
-         task => TASK_REMOVETMPCHECKIN,
-         handler => \&RemoveTemporaryCheckIns,
-     },
-     # Remove unnecessary Unpin/pin activities
-     {
-         task => TASK_MERGEUNPINPIN,
-         handler => \&MergeUnpinPinData,
-     },
-     # Rebuild possible missing comments
-     {
-         task => TASK_BUILDCOMMENTS,
-         handler => \&BuildComments,
-     },
-     # Take the history of physical actions and convert them to VSS
-     # file actions
-     {
-         task => TASK_BUILDACTIONHIST,
-         handler => \&BuildVssActionHistory,
-     },
-     # import to repository
-     {
-         task => TASK_IMPORTGIT,
-         handler => \&ImportToGit,
-     },
+
+#     # Merge data from parent records into child records where possible
+#     {
+#         task => TASK_MERGEPARENTDATA,
+#         handler => \&MergeParentData,
+#     },
+#
+#     # Merge data from move actions
+#     {
+#         task => TASK_MERGEMOVEDATA,
+#         handler => \&MergeMoveData,
+#     },
+#     # Remove temporary check ins
+#     {
+#         task => TASK_REMOVETMPCHECKIN,
+#         handler => \&RemoveTemporaryCheckIns,
+#     },
+#     # Remove unnecessary Unpin/pin activities
+#     {
+#         task => TASK_MERGEUNPINPIN,
+#         handler => \&MergeUnpinPinData,
+#     },
+#     # Rebuild possible missing comments
+#     {
+#         task => TASK_BUILDCOMMENTS,
+#         handler => \&BuildComments,
+#     },
+#     # Take the history of physical actions and convert them to VSS
+#     # file actions
+#     {
+#         task => TASK_BUILDACTIONHIST,
+#         handler => \&BuildVssActionHistory,
+#     },
+#     # import to repository
+#     {
+#         task => TASK_IMPORTGIT,
+#         handler => \&ImportToGit,
+#     },
      # done state
      {
          task    => TASK_DONE,
@@ -379,6 +396,7 @@ sub GetVssItemVersions {
         RecoveredProject => {type => VSS_PROJECT, action => ACTION_RECOVER},
         ArchiveProject => {type => VSS_PROJECT, action => ACTION_DELETE},
         RestoredProject => {type => VSS_PROJECT, action => ACTION_RESTORE},
+        ArchiveVersionsofProject => {type => VSS_PROJECT, action => ACTION_ADD},
         CheckedIn => {type => VSS_FILE, action => ACTION_COMMIT},
         CreatedFile => {type => VSS_FILE, action => ACTION_ADD},
         AddedFile => {type => VSS_FILE, action => ACTION_ADD},
@@ -387,7 +405,6 @@ sub GetVssItemVersions {
         DestroyedFile => {type => VSS_FILE, action => ACTION_DESTROY},
         RecoveredFile => {type => VSS_FILE, action => ACTION_RECOVER},
         ArchiveVersionsofFile => {type => VSS_FILE, action => ACTION_ADD},
-        ArchiveVersionsofProject => {type => VSS_PROJECT, action => ACTION_ADD},
         ArchiveFile => {type => VSS_FILE, action => ACTION_DELETE},
         RestoredFile => {type => VSS_FILE, action => ACTION_RESTORE},
         SharedFile => {type => VSS_FILE, action => ACTION_SHARE},
@@ -451,7 +468,6 @@ VERSION:
         if ($actiontype eq ACTION_LABEL) {
             my $iteminfo = $xml->{ItemInfo};
             $itemtype = $iteminfo->{Type};
-
         }
 
         # we can have label actions and labels attached to versions
@@ -509,12 +525,24 @@ VERSION:
             $is_binary = $xml->{ItemInfo}->{Binary};
         }
 
-        if ($actiontype eq ACTION_RENAME) {
-            # if a rename, we store the new name in the action's 'info' field
-            $info = &GetItemName($action->{NewSSName});
-        } elsif ($actiontype eq ACTION_BRANCH) {
-            $info = $action->{Parent};
+        for ($actiontype) {
+            when (ACTION_RENAME) {
+                # if a rename, we store the new name in the action's 'info' field
+                $info = &GetItemName($action->{NewSSName});
+            }
+            when (ACTION_BRANCH) {
+                $info = $action->{Parent};
+            }
+            when (ACTION_MOVE_TO) {
+                $info = $action->{DestPath};
+                $info =~ s/^..(.*)$/$1/;
+            }
+            when (ACTION_MOVE_FROM) {
+                $info = $action->{SrcPath};
+                $info =~ s/^..(.*)$/$1/;
+            }
         }
+
 
         $vernum = $version->{VersionNumber};
 
@@ -602,6 +630,76 @@ sub LoadNameLookup {
 }  #  End LoadNameLookup
 
 ###############################################################################
+#  InitGitImage
+###############################################################################
+sub GitReadImage {
+    # The git image is the physical layout of files in the git repo
+    # that get built up as we step through history. The git_image hash
+    # tracks the map from VSS name to inode (e.g. 'MBAAAAAA' => 1234).
+    # image_name tracks inodes to filesystem paths.  Projects (directories)
+    # only have one parent.  Files may have multiple parents (through hard links).
+
+    my($sth, $tth, $rows);
+    my ($last_time);
+
+    &TimestampLimits;
+
+
+    $last_time = $gCfg{mintime};
+    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
+
+    $tth = $gCfg{dbh}->prepare('SELECT min(timestamp) FROM PhysicalAction WHERE timestamp > ?');
+
+
+    while ($last_time < $gCfg{maxtime}) {
+
+        print "timestamp: $last_time\n";
+        &SchedulePhysicalActions($last_time);
+
+        $sth->execute();
+        $rows = $sth->fetchall_arrayref( {} );
+
+      ROW:
+        foreach my $row (@$rows) {
+            $last_time = $row->{timestamp};
+
+            my ($path, $parentpath);
+
+#            print "git_image: " . Dumper(\%git_image) . "\n";
+#            print "image_name: " . Dumper(\%image_name) . "\n";
+
+            if (defined $row->{parentphys}) {
+                print "parentphys: " . $row->{parentphys} .
+                    " physname: " . $row->{physname} .
+                    " timestamp: " .  $row->{timestamp} . "\n";
+                $parentpath = $image_name{$git_image{$row->{parentphys}}};
+                $path = ($row->{itemtype} == VSS_PROJECT)
+                    ? File::Spec->catdir($parentpath, $row->{itemname})
+                    : File::Spec->catfile($parentpath, $row->{itemname});
+            } else {
+                # presumably this is a child entry
+                # pick a path to update
+                if (defined $row->{physname}
+                    && defined $git_image{$row->{physname}}
+                    && defined $image_name{$git_image{$row->{physname}}}) {
+                    $path = @{$image_name{$git_image{$row->{physname}}}}[0];
+                    $parentpath = dirname($path);
+                }
+            }
+
+            my $sim = 0; # not simulating here
+            &UpdateGitRepository($row, $parentpath, $path, \%git_image, \%image_name, \$sim);
+        }
+
+        # get the next window
+        if ($last_time < $gCfg{maxtime}) {
+            $tth->execute($last_time);
+            $last_time = $tth->fetchall_arrayref()->[0][0];
+        }
+    }
+}
+
+###############################################################################
 #  MergeParentData
 ###############################################################################
 sub MergeParentData {
@@ -614,6 +712,9 @@ sub MergeParentData {
     # So, at this stage we look for any parent records which described child
     # actions, then update those records with data from the child objects. We
     # then delete the separate child objects to avoid duplication.
+
+    &StopConversion;
+
 
     my($sth, $rows, $row);
     $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalAction '
@@ -1390,7 +1491,7 @@ sub ExportVssPhysFile {
 
     my $exportdir = "$gCfg{vssdata}/$1";
 
-    mkpath($exportdir) if ! -e $exportdir;
+    make_path($exportdir) if ! -e $exportdir;
     $row = $gCfg{dbh}->selectrow_arrayref("SELECT datapath FROM Physical WHERE physname = ?", undef, $physname);
 
     if (!(defined $row && defined $row->[0])) {
@@ -1460,6 +1561,7 @@ SSPHYS exe   : $gCfg{ssphys}
 SSPHYS ver   : $ssversion
 XML Parser   : $gCfg{xmlParser}
 Task         : $gCfg{task}
+Rev Time     : $gCfg{revtimerange}
 
 EOTXT
 
@@ -1568,14 +1670,8 @@ EOSQL
 
     ($revisions) = $gCfg{dbh}->selectrow_array($sql);
 
-    $sql = <<"EOSQL";
-SELECT
-    MIN(timestamp), MAX(timestamp)
-FROM
-    PhysicalAction
-EOSQL
-
-    ($mintime, $maxtime) = $gCfg{dbh}->selectrow_array($sql);
+    $mintime = $gCfg{mintime};
+    $maxtime = $gCfg{maxtime};
 
     foreach($mintime, $maxtime) {
         $_ = POSIX::strftime("%Y-%m-%d", localtime($_));
@@ -1862,6 +1958,31 @@ EOSQL
     $gCfg{dbh}->do($sql);
 
     $sql = <<"EOSQL";
+CREATE TABLE
+    PhysicalActionSchedule (
+        schedule_id INTEGER PRIMARY KEY,
+        action_id   INTEGER UNIQUE,
+        physname    VARCHAR,
+        version     INTEGER,
+        parentphys  VARCHAR,
+        actiontype  VARCHAR,
+        itemname    VARCHAR,
+        itemtype    INTEGER,
+        timestamp   INTEGER,
+        author      VARCHAR,
+        is_binary   INTEGER,
+        info        VARCHAR,
+        priority    INTEGER,
+        sortkey     VARCHAR,
+        parentdata  INTEGER,
+        label       VARCHAR,
+        comment     TEXT
+    )
+EOSQL
+
+    $gCfg{dbh}->do($sql);
+
+    $sql = <<"EOSQL";
 CREATE INDEX
     PhysicalAction_IDX1 ON PhysicalAction (
         timestamp   ASC,
@@ -2030,11 +2151,17 @@ sub Initialize {
     $gCfg{repo} = abs_path($gCfg{repo});
     $gCfg{vssdir} = abs_path($gCfg{vssdir});
     $gCfg{vssdatadir} = File::Spec->catdir($gCfg{vssdir}, 'data');
-    $gCfg{revtimerange} = REVTIMERANGE unless defined($gCfg{revtimerange});
+    $gCfg{revtimerange} = REVTIMERANGE unless defined($gCfg{revtimerange}) && $gCfg{revtimerange} > 0;
 
     if (! -d $gCfg{repo}) {
         die "repo directory '$gCfg{repo}' is not a directory";
     }
+
+    # set up these items now
+    my @statb = stat($gCfg{repo});
+
+    $git_image{Vss2Svn::ActionHandler::VSSDB_ROOT} = $statb[1];
+    $image_name{$statb[1]} = $gCfg{repo};
 
     if (! -d $gCfg{vssdatadir}) {
         die "The VSS database '$gCfg{vssdir}' "
@@ -2081,6 +2208,7 @@ sub Initialize {
 
     &ConfigureXmlParser();
 
+    $gCfg{keepFile} = File::Spec->catfile($gCfg{tempdir},'.vss2svn2gitkeep');
     $gCfg{destroyedFile} = File::Spec->catfile($gCfg{tempdir},'destroyed.txt');
     $gCfg{deletedFile} = File::Spec->catfile($gCfg{tempdir},'deleted.txt');
     $gCfg{indeterminateFile} = File::Spec->catfile($gCfg{tempdir},'indeterminate.txt');
@@ -2219,9 +2347,10 @@ OPTIONAL PARAMETERS:
                          default is '@{[REPO]}'.  It is assumed that it has been
                          initialized with 'git init' and contains appropriate
                          settings files (e.g, .gitignore, .gitattributes, etc.).
-    --revtimerange <sec> : specify the difference between two VSS actions
-                           that are treated as one git commit;
-                           default is @{[REVTIMERANGE]} seconds (== 1hour)
+    --revtimerange <sec> : specify the maximum time difference (in seconds)
+                           between two VSS actions that are treated as one git commit;
+                           default is @{[REVTIMERANGE]} seconds (== 1hour).
+                           Must be > 0.
 
     --resume          : Resume a failed or aborted previous run
     --task <task>     : specify the task to resume; task is one of the following
@@ -2261,4 +2390,517 @@ vss2svn2git was not able to retrieve it. This file was possibly lost
 due to corruption in the VSS database.
 EOTXT
     close(DEST);
+
+    open (DEST, ">$gCfg{keepFile}");
+    close(DEST);
+}
+
+sub TimestampLimits {
+    my($sql);
+
+    $sql = <<"EOSQL";
+SELECT
+    MIN(timestamp), MAX(timestamp)
+FROM
+    PhysicalAction
+EOSQL
+
+    ($gCfg{mintime}, $gCfg{maxtime}) = $gCfg{dbh}->selectrow_array($sql);
+}
+
+sub SchedulePhysicalActions {
+    my($timestamp) = @_;
+    my($sth, $dth, $rows);
+    my ($last_time);
+    state $index = 0;
+
+    # We must schedule, since timestamp is not fine enough resolution,
+    # that some events happen before they should.
+
+    $dth = $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
+
+    $sth = $gCfg{dbh}->prepare('INSERT INTO PhysicalActionSchedule '
+                               . 'SELECT NULL, * FROM PhysicalAction WHERE timestamp >= ? '
+                               . 'AND timestamp < ? '
+                               . 'ORDER BY timestamp ASC, priority ASC, parentdata DESC');
+
+    $sth->execute($timestamp, $timestamp+$gCfg{revtimerange});
+    print "timestamp range: $timestamp - " . ($timestamp+$gCfg{revtimerange}) . "\n";
+
+    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
+
+  STARTOVER:
+    # clone these so we can simulate
+    my $giti = dclone(\%git_image);
+    my $iname = dclone(\%image_name);
+    my $inode_sim = 1; # the stat inode replacement
+
+    my @giti_keys = sort {$b <=> $a} values %{$giti};
+
+    if (scalar @giti_keys > 0) {
+        $inode_sim = $giti_keys[0] + 1;
+    }
+
+
+    $sth->execute();
+    $rows = $sth->fetchall_arrayref( {} );
+
+  ROW:
+    foreach my $row (@$rows) {
+        if ($index == 0
+            && $row->{physname} eq Vss2Svn::ActionHandler::VSSDB_ROOT
+            && $row->{actiontype} eq ACTION_ADD
+            && $row->{itemname} eq "") {
+            # first time through, we don't need this one
+            ++$index;
+            $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule WHERE schedule_id=' . $row->{schedule_id});
+            next ROW;
+        }
+
+        my ($path, $parentpath);
+
+        if (defined $row->{parentphys}) {
+            my $rescheduled = 0;
+            if (!defined $giti->{$row->{parentphys}}) {
+                # we are out of schedule
+                print "out of order: parentphys " . $row->{parentphys} . " physname: " . $row->{physname} . "\n";
+                if ($row->{actiontype} eq ACTION_ADD || $row->{actiontype} eq ACTION_SHARE) {
+                    # we are added out of schedule
+                    my $tth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
+                                               . 'WHERE timestamp = ? '
+                                               . 'ORDER BY schedule_id');
+                    $tth->execute($row->{timestamp});
+                    my $ooo = $tth->fetchall_arrayref();
+
+                    print "slice entries before: " . Dumper($ooo) . "\n";
+
+                    # grab all the out of order entries
+                    $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
+                                                  . 'WHERE parentphys = ? AND timestamp = ? '
+                                                  . 'ORDER BY schedule_id');
+                    $tth->execute($row->{parentphys}, $row->{timestamp});
+                    $ooo = $tth->fetchall_arrayref();
+                    my @ooo_ids;
+                    my @action_ids;
+
+                    foreach my $o (@$ooo) {
+                        push @ooo_ids, @{$o}[0];
+                        push @action_ids, @{$o}[1];
+                    }
+                    my $in_clause = join q{,}, @ooo_ids;
+
+                    # throw the out of order ones into a new table
+                    $gCfg{dbh}->do("CREATE TEMPORARY TABLE tmp AS SELECT * FROM PhysicalActionSchedule "
+                                            . "WHERE schedule_id IN ($in_clause)");
+
+                    # clear out the out of order records
+                    $gCfg{dbh}->do("DELETE FROM PhysicalActionSchedule WHERE schedule_id IN ($in_clause)");
+
+                    # count in order entries
+                    $tth = $gCfg{dbh}->prepare('SELECT max(schedule_id) FROM PhysicalActionSchedule '
+                                               . 'WHERE timestamp = ? AND physname = ? '
+                                               . 'ORDER BY schedule_id');
+                    $tth->execute($row->{timestamp}, $row->{parentphys});
+                    my $max_sched = $tth->fetchall_arrayref()->[0][0];
+
+                    print "ooo ids: $in_clause\n";
+
+                    if (!defined $max_sched) {
+                        # The contents of tmp is duplicate from the child.
+                        # We've already deleted the offending entry from PhysicalActionSchedule.
+                        $tth = $gCfg{dbh}->prepare('SELECT schedule_id FROM PhysicalActionSchedule '
+                                                   . 'WHERE timestamp = ? AND physname = ? '
+                                                   . 'ORDER BY schedule_id');
+                        $tth->execute($row->{timestamp}, $row->{physname});
+                        $max_sched = $tth->fetchall_arrayref();
+                        if (scalar @$max_sched == 1) {
+                            $gCfg{dbh}->do('DROP TABLE tmp');
+                            goto STARTOVER;
+                        }
+                        undef $max_sched;
+                    }
+
+                    print "max sched: $max_sched\n";
+
+                    $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
+                                               . 'WHERE timestamp = ? AND schedule_id > ? '
+                                               . 'ORDER BY schedule_id');
+                    $tth->execute($row->{timestamp}, $ooo_ids[0]);
+                    $ooo = $tth->fetchall_arrayref();
+
+
+                    my $idx = 0;
+                    foreach my $o (@$ooo) {
+                        # renumber in order entries
+                        $gCfg{dbh}->do('UPDATE PhysicalActionSchedule SET schedule_id=' . ($ooo_ids[0]+$idx)
+                                       . ' WHERE schedule_id = ' . @{$o}[0] . ' AND action_id = ' . @{$o}[1]);
+                        ++$idx;
+                    }
+
+                    print "out of order: " . Dumper(\@ooo_ids) . "\n";
+
+                    $tth = $gCfg{dbh}->prepare('SELECT * FROM tmp');
+                    $tth->execute();
+                    $ooo = $tth->fetchall_arrayref();
+
+                    print "out of order: " . Dumper($ooo) . "\n";
+
+                    # renumber the out of order ids
+                    my $idx2 = 0;
+                    foreach my $o (@ooo_ids) {
+                        my $j = ($ooo_ids[0]+$idx);
+                        print "out of order: $j $o\n";
+
+                        my $rv = $gCfg{dbh}->do("UPDATE tmp SET schedule_id=$j WHERE schedule_id = $o "
+                                                ."AND action_id = " . $action_ids[$idx2]);
+                        print "rv: $rv\n";
+                        ++$idx;
+                        ++$idx2;
+                    }
+
+
+                    $tth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
+                                                  . 'WHERE timestamp = ? '
+                                                  . 'ORDER BY schedule_id');
+                    $tth->execute($row->{timestamp});
+                    $ooo = $tth->fetchall_arrayref();
+
+                    print "in order renumbered: " . Dumper($ooo) . "\n";
+
+                    $tth = $gCfg{dbh}->prepare('SELECT * FROM tmp');
+                    $tth->execute();
+                    $ooo = $tth->fetchall_arrayref();
+
+                    print "out of order renumbered: " . Dumper($ooo) . "\n";
+
+                    $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule SELECT * FROM tmp');
+                    $gCfg{dbh}->do('DROP TABLE tmp');
+
+                    $tth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
+                                               . 'WHERE timestamp = ? '
+                                               . 'ORDER BY schedule_id');
+                    $tth->execute($row->{timestamp});
+                    $ooo = $tth->fetchall_arrayref();
+
+                    print "slice entries after: " . Dumper($ooo) . "\n";
+
+                    $rescheduled = 1;
+                }
+                if ($rescheduled) {
+                    print "rescheduling " . $row->{actiontype} . " for " . $row->{parentphys} . "\n";
+                    goto STARTOVER;
+                }
+            }
+
+            $parentpath = $iname->{$giti->{$row->{parentphys}}};
+            $path = ($row->{itemtype} == VSS_PROJECT)
+                ? File::Spec->catdir($parentpath, $row->{itemname})
+                : File::Spec->catfile($parentpath, $row->{itemname});
+        } else {
+            # presumably this is a child entry
+            # pick a path to update
+            if (defined $row->{physname}
+                && defined $giti->{$row->{physname}}
+                && defined $iname->{$giti->{$row->{physname}}}) {
+                $path = @{$iname->{$giti->{$row->{physname}}}}[0];
+                print "physname: " . $row->{physname} . " path: $path\n";
+                $parentpath = dirname($path);
+
+            }
+        }
+
+        &UpdateGitRepository($row, $parentpath, $path, $giti, $iname, \$inode_sim);
+    }
+    print "done scheduling -- " . (scalar @$rows) . " rows \n";
+
+}
+
+# fake returning inode numbers when simulating
+sub StatSimulated {
+    my($path, $simulatedref) = @_;
+    my @statb;
+
+    if (${$simulatedref}) {
+        push @statb, undef;
+        push @statb, ++${$simulatedref};
+    } else {
+        @statb = stat($path);
+    }
+
+    return @statb;
+}
+
+sub MoveProject {
+    my($oldpath, $newpath, $image_name) = @_;
+
+    foreach my $key (keys %{$image_name}) {
+        if (ref($image_name->{$key})) {
+            my $list = $image_name->{$key};
+            foreach my $l (@$list) {
+                $l =~ s/^\Q$oldpath\E(.*)$/$newpath$1/;
+            }
+            $image_name->{$key} = $list;
+        } else {
+            $image_name->{$key} =~ s/^\Q$oldpath\E(.*)$/$newpath$1/;
+        }
+    }
+}
+
+sub UpdateGitRepository {
+    my($row, $parentpath, $path, $git_image, $image_name, $simulatedref) = @_;
+
+    my @delete_actions = (ACTION_DELETE, ACTION_DESTROY);
+    my $simulated = ${$simulatedref};
+    my @statb;
+
+    for ($row->{itemtype}) {
+        when (VSS_PROJECT) {
+            for ($row->{actiontype}) {
+                when (ACTION_ADD) {
+                    if ($simulated) {
+                        if (!defined $git_image->{$row->{physname}}) {
+                            @statb = StatSimulated($path, $simulatedref);
+                            $git_image->{$row->{physname}} = $statb[1];
+                            $image_name->{$statb[1]} = $path;
+                        }
+                    } elsif (! -d $path) {
+                        make_path($path);
+                        copy($gCfg{keepFile}, $path);
+                        @statb = StatSimulated($path, $simulatedref);
+                        $git_image->{$row->{physname}} = $statb[1];
+                        $image_name->{$statb[1]} = $path;
+                        # XXX add to git
+                    }
+                }
+                when (ACTION_RESTOREDPROJECT) {
+                    # XXX need example
+                }
+                when (ACTION_RENAME) {
+                    my $newpath = File::Spec->catdir($parentpath, $row->{info});
+                    my $oldpath = File::Spec->catdir($parentpath, $row->{itemname});
+                    if (! -d $newpath) {
+                        my $s = $git_image->{$row->{physname}};
+                        move($path, $newpath) if !$simulated;
+                        # N.B. inode should _not_ have changed during move
+                        &MoveProject($oldpath, $newpath, $image_name);
+                        # XXX add to git
+                    }
+                }
+                when (ACTION_MOVE_TO) {
+                    # physname directory inode to move
+                    # parentphys physname's parent directory
+                    # info destination directory path
+                    my $newpath = File::Spec->catdir($gCfg{repo}, $row->{info});
+                    my $s = $git_image->{$row->{physname}};
+                    my $oldpath = $image_name->{$s};
+                    if ($simulated) {
+                        &MoveProject($oldpath, $newpath, $image_name);
+                    } elsif (! -d $newpath) {
+                        move($path, $newpath);
+                        # N.B. inode should _not_ have changed during move
+                        &MoveProject($oldpath, $newpath, $image_name);
+                        # XXX add to git
+                    }
+                }
+                when (ACTION_MOVE_FROM) {
+                    # physname moved directory inode
+                    # parentphys destination's parent directory
+                    # info source directory path
+                    my $oldpath = File::Spec->catdir($gCfg{repo}, $row->{info});
+                    my $s = $git_image->{$row->{physname}};
+                    if ($simulated) {
+                        &MoveProject($oldpath, $path, $image_name);
+                    } elsif (-d $oldpath) {
+                        move($oldpath, $path);
+                        # N.B. inode should _not_ have changed during move
+                        &MoveProject($oldpath, $path, $image_name);
+                        # XXX add to git
+                    }
+                }
+                when (@delete_actions) {
+                    if ($simulated) {
+                        my $s = delete $git_image->{$row->{physname}};
+                        delete $image_name->{$s};
+                    } elsif (-d $path) {
+                        my $s = delete $git_image->{$row->{physname}};
+                        delete $image_name->{$s};
+                        # XXX rm from git
+                        remove_tree($path);
+                    }
+                }
+                when (ACTION_RECOVER) {
+                    # XXX undo delete from git
+                }
+                when (ACTION_RESTORE) {
+                    # XXX need data
+                }
+                when (ACTION_LABEL) {
+                    # XXX create/checkout new branch and copy
+                }
+            }
+        }
+        when (VSS_FILE) {
+            for ($row->{actiontype}) {
+                when (ACTION_ADD) {
+                    # recorded in both the parent and child
+                    if ($row->{parentdata}) {
+                        if ($simulated) {
+                            if (!defined $git_image->{$row->{physname}}) {
+                                @statb = StatSimulated($path, $simulatedref);
+                                $git_image->{$row->{physname}} = $statb[1]; # one inode
+                                my $list = ();
+                                push @$list, $path;
+                                $image_name->{$statb[1]} = $list; # may be on multiple paths
+                            }
+                        } elsif (! -f $path) {
+                            copy($gCfg{keepFile}, $path); # touch the file
+                            @statb = StatSimulated($path, $simulatedref);
+                            $git_image->{$row->{physname}} = $statb[1]; # one inode
+                            print "statb: " . Dumper(\@statb) . " path: $path keep: $gCfg{keepFile}\n";
+                            my $list = ();
+                            push @$list, $path;
+                            $image_name->{$statb[1]} = $list; # may be on multiple paths
+                            # don't add to git here, this step will
+                            # be done by the file entry itself since the
+                            # file version info lives there
+                        }
+                    } elsif (defined $git_image->{$row->{physname}}) {
+                        my $s = $git_image->{$row->{physname}};
+
+                        $path = @{$image_name->{$s}}[0];
+                        my $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
+
+                        if (defined $exported) {
+                            # assuming copy does not change inode number
+                            copy(File::Spec->catfile($exported, $row->{physname} . '.' . $row->{version}), $path)
+                                if !$simulated;
+                            # XXX add to git
+                        }
+                    }
+                }
+                when (ACTION_RENAME) {
+                    # these are only recorded in the parent
+                    my $newpath = File::Spec->catfile($parentpath, $row->{info});
+                    my $s = $git_image->{$row->{physname}};
+                    move($path, $newpath) if !$simulated;
+
+                    # N.B. inode should _not_ have changed during move
+                    push @{$image_name->{$s}}, $newpath;
+                    @{$image_name->{$s}} = grep {!/^\Q$path\E/} @{$image_name->{$s}};
+                    # XXX add to git
+                }
+                when (@delete_actions) {
+                    # these are only recorded in the parent
+                    if ($simulated) {
+                        print "simulated delete physname: " . $row->{physname} ."\n";
+                        my $s = $git_image->{$row->{physname}};
+                        @{$image_name->{$s}} = grep {!/^\Q$path\E/} @{$image_name->{$s}};
+
+                        if (scalar @{$image_name->{$s}} == 0) {
+                            delete $git_image->{$row->{physname}};
+                        }
+                    } elsif (-f $path) {
+                        my $s = $git_image->{$row->{physname}};
+                        @{$image_name->{$s}} = grep {!/^\Q$path\E/} @{$image_name->{$s}};
+
+                        if (scalar @{$image_name->{$s}} == 0) {
+                            delete $git_image->{$row->{physname}};
+                        }
+                        # XXX rm from git
+                        unlink $path;
+                    }
+                }
+                when (ACTION_RECOVER) {
+                    # XXX find last delete and recover
+                }
+                when (ACTION_RESTORE) {
+                    # XXX need data
+                }
+                when (ACTION_COMMIT) {
+                    # only recorded in the child
+                    my $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
+
+                    if (defined $exported) {
+                        my $newver = File::Spec->catfile($exported, $row->{physname} . '.' . $row->{version});
+                        # XXX assuming copy does not change inode number
+                        my $s = $git_image->{$row->{physname}};
+                        copy($newver, $path) if !$simulated;
+                        # XXX git add
+                    }
+                }
+                when (ACTION_SHARE) {
+                    # only recorded in parent (but present in child XML)
+                    if ($simulated) {
+                        my $inum = $git_image->{$row->{physname}};
+                        my $oldpath = @{$image_name->{$inum}}[0];
+
+                        push @{$image_name->{$inum}}, $path;
+                    } elsif (! -f $path) {
+                        my $inum = $git_image->{$row->{physname}};
+                        my $oldpath = @{$image_name->{$inum}}[0];
+
+                        link $oldpath, $path;
+                        push @{$image_name->{$inum}}, $path;
+                        # XXX git add
+                    }
+                }
+                when (ACTION_BRANCH) {
+                    # branches recorded in parent and child
+                    # no git action required
+                    if ($row->{parentdata}) {
+                        # set up bindings for the new branch
+                        my $branchtmp = File::Spec->catfile($parentpath, BRANCH_TMP_FILE);
+                        copy($path, $branchtmp) if !$simulated; # should create new file
+                        @statb = StatSimulated($branchtmp, $simulatedref);
+                        $git_image->{$row->{physname}} = $statb[1];
+                        my $list = ();
+                        push @$list, $path;
+                        $image_name->{$statb[1]} = $list;
+
+                        if (!$simulated) {
+                            unlink $path; # make sure link count is decremented
+                            move($branchtmp, $path);
+                        }
+
+                        # remove bindings for the old one
+                        my $s = $git_image->{$row->{info}};
+                        @{$image_name->{$s}} = grep {!/^\Q$path\E/} @{$image_name->{$s}};
+                    }
+                }
+                when (ACTION_PIN) {
+                    if (defined $row->{info}) {
+                        # this is an unpin
+
+                        # Find the latest version and copy it over...
+                        my $qth = $gCfg{dbh}->prepare('SELECT max(version) FROM WHERE physname = ? AND timestamp < ? '
+                                                      . 'AND parentphys IS NULL');
+                        $qth->execute($row->{physname}, $row->{timestamp});
+                        my $ver = $qth->fetchall_arrayref()->[0][0];
+                        my $exported = &ExportVssPhysFile($row->{physname}, $ver);
+
+                        if (defined $exported) {
+                            copy(File::Spec->catfile($exported, $row->{physname} . '.' . $ver), $path)
+                                if !$simulated;
+                        }
+                        # XXX git add
+                    } else {
+                        # this is a pin
+                        # There's not a really good way to do this, since the
+                        # git doesn't suport this, nor does the filesystem.
+                        # Find the old version and copy it over...
+                        my $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
+
+                        if (defined $exported) {
+                            copy(File::Spec->catfile($exported, $row->{physname} . '.' . $row->{version}), $path)
+                                if !$simulated;
+                        }
+                        # XXX git add
+                    }
+                }
+                when (ACTION_LABEL) {
+                    # XXX create/checkout new orphan branch and copy
+                }
+            }
+        }
+    }
 }
