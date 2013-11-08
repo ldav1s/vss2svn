@@ -10,6 +10,7 @@ use feature "state";
 
 use Cwd 'abs_path';
 use Getopt::Long;
+use Data::UUID;
 use DBI;
 use DBD::SQLite2;
 use XML::Simple;
@@ -60,6 +61,9 @@ use constant {
     VSS_FILE => 2,
     BRANCH_TMP_FILE => '.vss2svn2gitbranchtmp',
     KEEP_FILE => '.vss2svn2gitkeep',
+    VSS2SVN2GIT_NS => 'ns:vss2svn2git',
+    PROGNAME => 'vss2svn2git',
+    PROGNAME_URL => 'https://github.com/ldav1s/vss2svn',
 };
 
 use constant {
@@ -86,17 +90,21 @@ $VERSION =~ s/\$.*?(\d+).*\$/$1/; # get only the number out of the svn revision
 
 # The git image is the physical layout of files in the git repo
 # that get built up as we step through history.
-# The git_image hash maps from VSS physname to inode (e.g. 'MBAAAAAA' => 1234).
+# The git_image hash maps from VSS physname to hard link list for VSS_FILEs:
+# (e.g. 'MBAAAAAA' => ('/some/repo/file', '/some/repo/somewhere/shared-file')).
+# The link to "$gCfg{links}/MBAAAAAA" is implicit.
+# The image is physname to path (e.g. 'XBAAAAAA' => '/some/repo/dir') for
+# VSS_PROJECT.
 my %git_image = ();
 
-# The image_name hash maps inodes to filesystem paths.
-# Projects (VSS directories) only have one parent. VSS files
-# may have multiple parents through SHARE actions which are simulated
-# in git (on Linux) by hard links.  git does not track that, but tracks
-# file contents instead.
-my %image_name = ();
-
+# Label map is a map from VSS label names to the corresponding git branch name
+# (e.g. 'My VSS Label' => 'My_VSS_Label').  If the label is undef, a
+# unique name will be generated for it (and not added here).  If the label is
+# defined but the branch name algorithm fails to generate a "fixed up" version
+# it will also be given a generated name and stored here.
 my $label_map = ();
+
+# The author map maps VSS author information to git author information
 my $author_map = ();
 
 # The main VSS activity is put into git master, and labels into their own branch
@@ -685,20 +693,19 @@ sub GitReadImage {
 
             my ($path, $parentpath);
 
-            if ($dump_cnt % 100 == 0) {
-                print "git_image: " . Dumper(\%git_image) . "\n";
-                print "image_name: " . Dumper(\%image_name) . "\n";
-                if ($dump_cnt == 100) {
-                    exit(0);
-                }
-            }
+#            if ($dump_cnt % 100 == 0) {
+#                print "git_image: " . Dumper(\%git_image) . "\n";
+#                if ($dump_cnt == 100) {
+#                    exit(0);
+#                }
+#            }
             ++$dump_cnt;
 
             if (defined $row->{parentphys}) {
                 print "parentphys: " . $row->{parentphys} .
                     " physname: " . $row->{physname} .
                     " timestamp: " .  $row->{timestamp} . "\n";
-                $parentpath = $image_name{$git_image{$row->{parentphys}}};
+                $parentpath = $git_image{$row->{parentphys}};
                 $path = ($row->{itemtype} == VSS_PROJECT)
                     ? File::Spec->catdir($parentpath, $row->{itemname})
                     : File::Spec->catfile($parentpath, $row->{itemname});
@@ -706,15 +713,13 @@ sub GitReadImage {
                 # presumably this is a child entry
                 # pick a path to update
                 if (defined $row->{physname}
-                    && defined $git_image{$row->{physname}}
-                    && defined $image_name{$git_image{$row->{physname}}}) {
-                    $path = @{$image_name{$git_image{$row->{physname}}}}[0];
+                    && defined $git_image{$row->{physname}}) {
+                    $path = @{$git_image{$row->{physname}}}[0];
                     $parentpath = dirname($path);
                 }
             }
 
-            my $sim = 0; # not simulating here
-            &UpdateGitRepository($row, $parentpath, $path, \%git_image, \%image_name, \$sim, $repo);
+            &UpdateGitRepository($row, $parentpath, $path, \%git_image, 0, $repo);
         }
 
         if (defined $username) {
@@ -747,33 +752,35 @@ sub GitReadImage {
     # SO is CC BY-SA 3.0 <http://creativecommons.org/licenses/by-sa/3.0/>
     # at the time of this writing.
     my @shares = ();
-    foreach my $key (keys %image_name) {
-        my $ary = $image_name{$key};
-        my $base = shift @$ary;
-        $base =~ s/^\Q$gCfg{repo}\E.//;
+    foreach my $key (keys %git_image) {
+        if (ref($git_image{$key})) {
+            my $ary = $git_image{$key};
+            my $base = shift @$ary;
+            $base =~ s/^\Q$gCfg{repo}\E.//; # XXX not portable
 
-        if (scalar @$ary > 0) {
-            my @basedir = File::Spec->splitdir($base);
+            if (scalar @$ary > 0) {
+                my @basedir = File::Spec->splitdir($base);
 
-            unshift @basedir, File::Spec->updir();
-            unshift @basedir, '$GIT_DIR';
+                unshift @basedir, File::Spec->updir();
+                unshift @basedir, '$GIT_DIR';
 
-            my $basepath = File::Spec->catfile(@basedir);
+                my $basepath = File::Spec->catfile(@basedir);
 
-            push @shares, "#";
-            push @shares, "# $base";
-            push @shares, "#";
+                push @shares, "#";
+                push @shares, "# $base";
+                push @shares, "#";
 
-            # synthesize the hard link
-            # XXX This could be a shell quoting nightmare...
-            foreach my $e (@$ary) {
-                my @edir = File::Spec->splitdir($e);
-                unshift @edir, File::Spec->updir();
-                unshift @edir, '$GIT_DIR';
+                # synthesize the hard link
+                # XXX This could be a shell quoting nightmare...
+                foreach my $e (@$ary) {
+                    my @edir = File::Spec->splitdir($e);
+                    unshift @edir, File::Spec->updir();
+                    unshift @edir, '$GIT_DIR';
 
-                my $linkpath = File::Spec->catfile(@edir);
-                my $link = 'ln -f "' . $basepath . '"  "' . $linkpath . '"';
-                push @shares, $link;
+                    my $linkpath = File::Spec->catfile(@edir);
+                    my $link = 'ln -f "' . $basepath . '"  "' . $linkpath . '"';
+                    push @shares, $link;
+                }
             }
         }
     }
@@ -1452,16 +1459,22 @@ sub CheckForDestroy {
 
         $physpath = "$exportdir/$physname.$version";
         if (! -e $physpath) {
-            copy("$gCfg{indeterminateFile}", $physpath);
+            if (!copy("$gCfg{indeterminateFile}", $physpath)) {
+                print "CheckForDestroy: indeterminate copy $!\n";
+            }
         }
     } else {
         # It was DESTROYed or DELETEd
         $physpath = "$exportdir/$physname.$version";
         if (! -e $physpath) {
             if (defined $row && defined $row->[0]) {
-                copy("$gCfg{destroyedFile}", $physpath);
+                if (!copy("$gCfg{destroyedFile}", $physpath)) {
+                    print "CheckForDestroy: destroyed copy $!\n";
+                }
             } elsif (defined $rowd && defined $rowd->[0]) {
-                copy("$gCfg{deletedFile}", $physpath);
+                if (!copy("$gCfg{deletedFile}", $physpath)) {
+                    print "CheckForDestroy: deleted copy $!\n";
+                }
             }
         }
     }
@@ -1688,8 +1701,8 @@ The VSS to GIT conversion is complete.
 
 If any errors occurred during the conversion, they are summarized above.
 
-For more information on the vss2svn2git project, see:
-https://github.com/ldav1s/vss2svn
+For more information on the @{[PROGNAME]} project, see:
+@{[PROGNAME_URL]}
 
 EOTXT
 
@@ -2271,8 +2284,7 @@ sub Initialize {
     # set up these items now
     my @statb = stat($gCfg{repo});
 
-    $git_image{Vss2Svn::ActionHandler::VSSDB_ROOT} = $statb[1];
-    $image_name{$statb[1]} = $gCfg{repo};
+    $git_image{Vss2Svn::ActionHandler::VSSDB_ROOT} = $gCfg{repo};
 
     if (! -d $gCfg{vssdatadir}) {
         die "The VSS database '$gCfg{vssdir}' "
@@ -2302,6 +2314,10 @@ sub Initialize {
 
     # Directories for holding VSS revisions
     $gCfg{vssdata} = File::Spec->catdir($gCfg{tempdir}, 'vssdata');
+
+    # Directory for implementing file share/pin/branch.
+    # All VSS_FILE entries, not just those shared/pinned will be linked here.
+    $gCfg{links} = File::Spec->catdir($gCfg{tempdir}, 'links');
 
     $gCfg{resume} = 1 if defined $gCfg{task} && ($gCfg{task} ne TASK_INIT);
 
@@ -2342,6 +2358,8 @@ sub Initialize {
 
     rmtree($gCfg{vssdata}) if (-e $gCfg{vssdata});
     mkdir $gCfg{vssdata};
+    rmtree($gCfg{links}) if (-e $gCfg{links});
+    mkdir $gCfg{links};
 
     &WriteDestroyedPlaceholderFiles();
 
@@ -2493,22 +2511,22 @@ EOTXT
 sub WriteDestroyedPlaceholderFiles {
     open (DEST, ">$gCfg{destroyedFile}");
     print DEST <<"EOTXT";
-vss2svn2git has determined that this file has been destroyed in VSS history.
-vss2svn2git cannot retrieve it, since it no longer exists in the VSS database.
+@{[PROGNAME]} has determined that this file has been destroyed in VSS history.
+@{[PROGNAME]} cannot retrieve it, since it no longer exists in the VSS database.
 EOTXT
     close(DEST);
 
     open (DEST, ">$gCfg{deletedFile}");
     print DEST <<"EOTXT";
-vss2svn2git has determined that this file has been deleted in VSS history.
-vss2svn2git cannot retrieve it, since it no longer exists in the VSS database.
+@{[PROGNAME]} has determined that this file has been deleted in VSS history.
+@{[PROGNAME]} cannot retrieve it, since it no longer exists in the VSS database.
 EOTXT
     close(DEST);
 
     open (DEST, ">$gCfg{indeterminateFile}");
     print DEST <<"EOTXT";
-vss2svn2git cannot determine what has happened to this file.
-vss2svn2git was not able to retrieve it. This file was possibly lost
+@{[PROGNAME]} cannot determine what has happened to this file.
+@{[PROGNAME]} was not able to retrieve it. This file was possibly lost
 due to corruption in the VSS database.
 EOTXT
     close(DEST);
@@ -2572,15 +2590,6 @@ sub SchedulePhysicalActions {
       STARTOVER:
         # deep clone these so we can simulate
         my $giti = dclone(\%git_image);
-        my $iname = dclone(\%image_name);
-        my $inode_sim = 1; # the stat inode replacement
-
-        # figure out a unique starting inode number for simulation
-        my @giti_keys = sort {$b <=> $a} values %{$giti};
-
-        if (scalar @giti_keys > 0) {
-            $inode_sim = $giti_keys[0] + 1;
-        }
 
         # start scheduling
         $sth->execute();
@@ -2741,7 +2750,7 @@ sub SchedulePhysicalActions {
                     }
                 }
 
-                $parentpath = $iname->{$giti->{$row->{parentphys}}};
+                $parentpath = $giti->{$row->{parentphys}};
                 $path = ($row->{itemtype} == VSS_PROJECT)
                     ? File::Spec->catdir($parentpath, $row->{itemname})
                     : File::Spec->catfile($parentpath, $row->{itemname});
@@ -2749,14 +2758,13 @@ sub SchedulePhysicalActions {
                 # presumably this is a child entry
                 # pick a path to update
                 if (defined $row->{physname}
-                    && defined $giti->{$row->{physname}}
-                    && defined $iname->{$giti->{$row->{physname}}}) {
-                    $path = @{$iname->{$giti->{$row->{physname}}}}[0];
+                    && defined $giti->{$row->{physname}}) {
+                    $path = @{$giti->{$row->{physname}}}[0];
                     $parentpath = dirname($path);
                 }
             }
 
-            &UpdateGitRepository($row, $parentpath, $path, $giti, $iname, \$inode_sim, undef);
+            &UpdateGitRepository($row, $parentpath, $path, $giti, 1, undef);
         }
         print "done scheduling -- " . (scalar @$rows) . " rows \n";
     }
@@ -2856,12 +2864,16 @@ sub GetOneChangeset {
     # parentdata = 0 means that there could be labels there.
     # This should be sufficient to isolate LABEL actions, since other
     # actions won't have label data.
-    ($schedule_id) = $gCfg{dbh}->selectrow_array('SELECT MIN(B.schedule_id) '
-                                                 . 'FROM (SELECT label FROM PhysicalActionSchedule '
-                                                 . '      WHERE parentdata = 0 ORDER BY schedule_id LIMIT 1) AS A '
-                                                 . 'CROSS JOIN (SELECT schedule_id, label FROM PhysicalActionSchedule '
-                                                 . '            WHERE parentdata = 0) AS B '
-                                                 . 'WHERE A.label != B.label');
+    ($schedule_id) = $gCfg{dbh}->selectrow_array("SELECT MIN(B.schedule_id) "
+                                                 . "FROM (SELECT actiontype, label FROM PhysicalActionSchedule "
+                                                 . "      WHERE parentdata = 0 ORDER BY schedule_id LIMIT 1) AS A "
+                                                 . "CROSS JOIN (SELECT schedule_id, actiontype, label FROM PhysicalActionSchedule "
+                                                 . "            WHERE parentdata = 0) AS B "
+                                                 . "WHERE (A.actiontype = '@{[ACTION_LABEL]}' "
+                                                 . "    OR B.actiontype = '@{[ACTION_LABEL]}') "
+                                                 . "AND (A.label IS NULL AND B.label IS NOT NULL "
+                                                 . "     OR A.label IS NOT NULL AND B.label IS NULL "
+                                                 . "     OR A.label IS NOT NULL AND B.label IS NOT NULL AND A.label != B.label)");
     if ($schedule_id) {
         $isth->execute($schedule_id);
         $dsth->execute($schedule_id);
@@ -2933,69 +2945,52 @@ sub GetOneChangeset {
     }
 }
 
-# fake returning inode numbers when simulating
-sub StatSimulated {
-    my($simulatedref) = @_;
-    my @statb = (undef, ++${$simulatedref});
-
-    return @statb;
-}
-
 # update the image name mapping when files/directories are moved
 sub MoveProject {
-    my($oldpath, $newpath, $image_name) = @_;
+    my($oldpath, $newpath, $git_image) = @_;
     my $sep = "/"; # XXX not platform independent
     my $oldpath_re = qr/^\Q${oldpath}${sep}\E(.*)$/;
     my $oldpath_nosep_re = qr/^\Q${oldpath}\E$/;
 
-    foreach my $key (keys %{$image_name}) {
-        if (ref($image_name->{$key})) {
-            s/$oldpath_re/${newpath}${sep}$1/ for @{$image_name->{$key}};
-        } else {
-            # have to be a little careful here...
-            if ($image_name->{$key} =~ m/$oldpath_re/) {
-                $image_name->{$key} =~ s/$oldpath_re/${newpath}${sep}$1/;
-            } elsif ($image_name->{$key} =~ m/$oldpath_nosep_re/) {
-                $image_name->{$key} = ${newpath};
-            }
+    foreach my $key (keys %{$git_image}) {
+        # have to be a little careful here with VSS_PROJECTs...
+        if (ref($git_image->{$key})) {
+            # substitute for VSS_FILEs
+            s/$oldpath_re/${newpath}${sep}$1/ for @{$git_image->{$key}};
+        } elsif ($git_image->{$key} =~ m/$oldpath_re/) {
+            $git_image->{$key} =~ s/$oldpath_re/${newpath}${sep}$1/;
+        } elsif ($git_image->{$key} =~ m/$oldpath_nosep_re/) {
+            $git_image->{$key} = ${newpath};
         }
     }
 }
 
 sub RmProject {
-    my($path, $git_image, $image_name) = @_;
+    my($path, $git_image) = @_;
     my $sep = "/"; # XXX not platform independent
     my $path_re = qr/^\Q${path}${sep}\E/;
     my $path_nosep_re = qr/^\Q${path}\E$/;
 
-    foreach my $key (keys %{$image_name}) {
-        if (ref($image_name->{$key})) {
-            @{$image_name->{$key}} = grep {!/$path_re/} @{$image_name->{$key}};
-            if (scalar @{$image_name->{$key}} == 0) {
-                delete $image_name->{$key};
-                my @matches = grep { $git_image->{$_} == $key } keys %{$git_image};
-                foreach my $m (@matches) {
-                    delete $git_image->{$m};
-                }
+#    print "git_image: " . Dumper($git_image) . "\n";
+
+    foreach my $key (keys %{$git_image}) {
+        if (ref($git_image->{$key})) {
+            @{$git_image->{$key}} = grep {!/$path_re/} @{$git_image->{$key}};
+            if (scalar @{$git_image->{$key}} == 0) {
+                delete $git_image->{$key};
             }
-        } elsif ($image_name->{$key} =~ /$path_re|$path_nosep_re/) {
-            delete $image_name->{$key};
-            my @matches = grep { $git_image->{$_} == $key } keys %{$git_image};
-            foreach my $m (@matches) {
-                delete $git_image->{$m};
-            }
+        } elsif ($git_image->{$key} =~ m/$path_re|$path_nosep_re/) {
+            delete $git_image->{$key};
         }
     }
 }
 
 # invoke git one action at a time
 sub UpdateGitRepository {
-    my($row, $parentpath, $path, $git_image, $image_name, $simulatedref, $repo) = @_;
+    my($row, $parentpath, $path, $git_image, $simulated, $repo) = @_;
 
     my @delete_actions = (ACTION_DELETE, ACTION_DESTROY);
     my @restore_actions = (ACTION_RESTORE, ACTION_RESTOREDPROJECT);
-    my $simulated = ${$simulatedref};
-    my @statb;
 
     eval {
     for ($row->{itemtype}) {
@@ -3004,19 +2999,17 @@ sub UpdateGitRepository {
                 when (ACTION_ADD) {
                     if ($simulated) {
                         if (!defined $git_image->{$row->{physname}}) {
-                            @statb = StatSimulated($simulatedref);
-                            $git_image->{$row->{physname}} = $statb[1];
-                            $image_name->{$statb[1]} = $path;
+                            $git_image->{$row->{physname}} = $path;
                         }
                     } elsif (! -d $path) {
                         make_path($path);
-                        copy($gCfg{keepFile}, $path);
-                        @statb = stat($path);
-                        $git_image->{$row->{physname}} = $statb[1];
-                        $image_name->{$statb[1]} = $path;
-
-                        $repo->command('add', '--',  $path);
-                        &RemoveKeep($repo, $parentpath);
+                        if (!copy($gCfg{keepFile}, $path)) {
+                            print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_PROJECT]} copy $!\n";
+                        } else {
+                            $git_image->{$row->{physname}} = $path;
+                            $repo->command('add', '--',  $path);
+                            &RemoveKeep($repo, $parentpath);
+                        }
                     }
                 }
                 when (@restore_actions) {
@@ -3026,7 +3019,7 @@ sub UpdateGitRepository {
                 }
                 when (ACTION_RENAME) {
                     my $newpath = File::Spec->catdir($parentpath, $row->{info});
-                    &DoMoveProject($repo, $path, $newpath, $image_name, $simulated, 1);
+                    &DoMoveProject($repo, $path, $newpath, $git_image, $simulated, 1);
                 }
                 when (ACTION_MOVE_TO) {
                     # physname directory inode to move
@@ -3034,7 +3027,7 @@ sub UpdateGitRepository {
                     # info destination directory path
                     my $newpath = File::Spec->catdir($gCfg{repo}, $row->{info});
 
-                    &DoMoveProject($repo, $path, $newpath, $image_name, $simulated, 1);
+                    &DoMoveProject($repo, $path, $newpath, $git_image, $simulated, 1);
                 }
                 when (ACTION_MOVE_FROM) {
                     # physname moved directory inode
@@ -3042,22 +3035,18 @@ sub UpdateGitRepository {
                     # info source directory path
                     my $oldpath = File::Spec->catdir($gCfg{repo}, $row->{info});
 
-                    &DoMoveProject($repo, $oldpath, $path, $image_name, $simulated, 0);
+                    &DoMoveProject($repo, $oldpath, $path, $git_image, $simulated, 0);
                 }
                 when (@delete_actions) {
                     if ($simulated) {
-                        my $s = delete $git_image->{$row->{physname}};
-                        delete $image_name->{$s};
-                        &RmProject($path, $git_image, $image_name);
+                        &RmProject($path, $git_image);
                     } elsif (-d $path) {
-                        my $s = delete $git_image->{$row->{physname}};
-                        delete $image_name->{$s};
-                        &RmProject($path, $git_image, $image_name);
+                        &RmProject($path, $git_image);
                         &GitRm($repo, $parentpath, $path, $row->{itemtype});
                     }
                 }
                 when (ACTION_RECOVER) {
-                    &GitRecover($repo, $row, $path, $git_image, $image_name, $simulatedref);
+                    &GitRecover($repo, $row, $path, $git_image, $simulated);
                 }
                 when (ACTION_LABEL) {
                     &GitLabel($row, $repo, $path, $simulated);
@@ -3071,40 +3060,50 @@ sub UpdateGitRepository {
                     if ($row->{parentdata}) {
                         if ($simulated) {
                             if (!defined $git_image->{$row->{physname}}) {
-                                @statb = StatSimulated($simulatedref);
-                                $git_image->{$row->{physname}} = $statb[1]; # one inode
-                                @{$image_name->{$statb[1]}} = ("$path") x 1; # may be on multiple paths
+                                @{$git_image->{$row->{physname}}} = ("$path"); # may be on multiple paths
                             }
                         } elsif (! -f $path) {
                             # In the case of a destroyed file there's only the parent record
                             # we'll go ahead and add the file in case the child record is blown away
                             # by something.
-                            my ($action_id) = $gCfg{dbh}->selectrow_array("SELECT action_id "
-                                                                          . "FROM PhysicalAction "
-                                                                          . "WHERE physname = ? AND actiontype = '@{[ACTION_DESTROY]}' "
-                                                                          . "LIMIT 1", # just in case
-                                                                          undef, $row->{physname});
-                            copy((($action_id) ? $gCfg{destroyedFile} : $gCfg{indeterminateFile}), $path); # touch the file
+                            my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
+
+                            if (! -f  $link_file) {
+                                my ($action_id) = $gCfg{dbh}->selectrow_array("SELECT action_id "
+                                                                              . "FROM PhysicalAction "
+                                                                              . "WHERE physname = ? AND actiontype = '@{[ACTION_DESTROY]}' "
+                                                                              . "LIMIT 1", # just in case
+                                                                              undef, $row->{physname});
+                                if (!copy((($action_id) ? $gCfg{destroyedFile} : $gCfg{indeterminateFile}),
+                                          $link_file)) {  # touch the file
+                                    print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                                } else {
+                                    link $link_file, $path;
+                                }
+                            }
                             $repo->command('add', '--',  $path);
                             &RemoveKeep($repo, $parentpath);
-                            @statb = stat($path);
-
-                            $git_image->{$row->{physname}} = $statb[1]; # one inode
-                            @{$image_name->{$statb[1]}} = ("$path") x 1; # may be on multiple paths
+                            @{$git_image->{$row->{physname}}} = ("$path"); # may be on multiple paths
                         }
-                    } elsif (defined $git_image->{$row->{physname}}) {
+                    } elsif (defined $git_image->{$row->{physname}}
+                             && ref($git_image->{$row->{physname}})) {
                         # we have child data here
-                        my $s = $git_image->{$row->{physname}};
+                        my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
 
-                        $path = @{$image_name->{$s}}[0];
+                        $path = @{$git_image->{$row->{physname}}}[0];
                         my $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
 
                         if (defined $exported) {
-                            # assuming copy does not change inode number
+                            # copy the data to the link
                             if (!$simulated) {
-                                copy(File::Spec->catfile($exported, $row->{physname} . '.' . $row->{version}), $path);
-                                $repo->command('add', '--',  $path);
-                                &RemoveKeep($repo, $parentpath);
+                                if (!copy(File::Spec->catfile($exported,
+                                                              $row->{physname} . '.' . $row->{version}),
+                                          $link_file)) {
+                                    print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export path `$link_file' copy $!\n";
+                                } else {
+                                    $repo->command('add', '--',  $path);
+                                    &RemoveKeep($repo, $parentpath);
+                                }
                             }
                         }
                     }
@@ -3112,39 +3111,33 @@ sub UpdateGitRepository {
                 when (ACTION_RENAME) {
                     # these are only recorded in the parent
                     my $newpath = File::Spec->catfile($parentpath, $row->{info});
-                    my $s = $git_image->{$row->{physname}};
                     $repo->command('mv',  $path,  $newpath) if !$simulated;
 
-                    # N.B. inode should _not_ have changed during move
-                    @{$image_name->{$s}} = grep {!/^\Q$path\E/} @{$image_name->{$s}};
-                    push @{$image_name->{$s}}, $newpath;
+                    # remove the old path, add the new path
+                    @{$git_image->{$row->{physname}}} = grep {!/^\Q$path\E$/} @{$git_image->{$row->{physname}}};
+                    push @{$git_image->{$row->{physname}}}, $newpath;
                 }
                 when (@delete_actions) {
                     # these are only recorded in the parent
-                    my $path_re = qr/^\Q$path\E/;
+                    my $path_re = qr/^\Q$path\E$/;
 
                     if ($simulated) {
-                        my $s = $git_image->{$row->{physname}};
-                        @{$image_name->{$s}} = grep {!/$path_re/} @{$image_name->{$s}};
-
-                        if (scalar @{$image_name->{$s}} == 0) {
+                        @{$git_image->{$row->{physname}}} = grep {!/$path_re/} @{$git_image->{$row->{physname}}};
+                        if (scalar @{$git_image->{$row->{physname}}} == 0) {
                             delete $git_image->{$row->{physname}};
-                            delete $image_name->{$s};
                         }
                     } elsif (-f $path) {
-                        my $s = $git_image->{$row->{physname}};
-                        @{$image_name->{$s}} = grep {!/$path_re/} @{$image_name->{$s}};
+                        @{$git_image->{$row->{physname}}} = grep {!/$path_re/} @{$git_image->{$row->{physname}}};
 
-                        if (scalar @{$image_name->{$s}} == 0) {
+                        if (scalar @{$git_image->{$row->{physname}}} == 0) {
+                            print "UpdateGitRepository delete @{[VSS_FILE]}: deleting git image $row->{physname}\n" if $gCfg{debug};
                             delete $git_image->{$row->{physname}};
-                            delete $image_name->{$s};
                         }
-
                         &GitRm($repo, $parentpath, $path, $row->{itemtype});
                     }
                 }
                 when (ACTION_RECOVER) {
-                    &GitRecover($repo, $row, $path, $git_image, $image_name, $simulatedref);
+                    &GitRecover($repo, $row, $path, $git_image, $simulated);
                 }
                 when (@restore_actions) {
                     # XXX need example
@@ -3157,24 +3150,26 @@ sub UpdateGitRepository {
 
                     if (defined $exported) {
                         my $newver = File::Spec->catfile($exported, $row->{physname} . '.' . $row->{version});
+                        my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
 
                         if (!$simulated) {
-                            # XXX assuming copy does not change inode number
-                            copy($newver, $path);
-                            $repo->command('add', '--',  $path);
+                            if (!copy($newver, $link_file)) {
+                                print "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                            } else {
+                                $repo->command('add', '--',  $path);
+                            }
                         }
                     }
                 }
                 when (ACTION_SHARE) {
                     # only recorded in parent (but present in child XML)
-                    my $inum = $git_image->{$row->{physname}};
-                    my $oldpath = @{$image_name->{$inum}}[0];
+                    my $oldpath = @{$git_image->{$row->{physname}}}[0];
 
                     if ($simulated) {
-                        push @{$image_name->{$inum}}, $path;
+                        push @{$git_image->{$row->{physname}}}, $path;
                     } elsif (! -f $path) {
                         link $oldpath, $path;
-                        push @{$image_name->{$inum}}, $path;
+                        push @{$git_image->{$row->{physname}}}, $path;
                         $repo->command('add', '--',  $path);
                         &RemoveKeep($repo, $parentpath);
                     }
@@ -3184,61 +3179,54 @@ sub UpdateGitRepository {
                     # no git action required
                     if ($row->{parentdata}) {
                         # set up bindings for the new branch
-                        my $branchtmp = File::Spec->catfile($parentpath, BRANCH_TMP_FILE);
-                        copy($path, $branchtmp) if !$simulated; # should create new file
-                        if ($simulated) {
-                            @statb = StatSimulated($simulatedref);
-                        } else {
-                            @statb = stat($branchtmp);
-                        }
-                        $git_image->{$row->{physname}} = $statb[1];
-                        @{$image_name->{$statb[1]}} = ("$path") x 1;
+                        my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
 
-                        if (!$simulated) {
-                            unlink $path; # decrement any link count
-                            move($branchtmp, $path);
+                        if ($simulated) {
+                            @{$git_image->{$row->{physname}}} = ("$path");
+                        } else {
+                            if (!copy($path, $link_file)) { # should create new file
+                                print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                            } else {
+                                unlink $path; # decrement any link count
+                                link $link_file, $path; # add $path as the new link
+                                @{$git_image->{$row->{physname}}} = ("$path");
+                            }
                             # shouldn't need to 'git add', it's a file with the same contents
                         }
 
                         # remove bindings for the old one
-                        my $s = $git_image->{$row->{info}};
-                        my $path_re = qr/^\Q$path\E/;
-                        @{$image_name->{$s}} = grep {!/$path_re/} @{$image_name->{$s}};
-                        if (scalar @{$image_name->{$s}} == 0) {
+                        my $path_re = qr/^\Q$path\E$/;
+                        @{$git_image->{$row->{info}}} = grep {!/$path_re/} @{$git_image->{$row->{info}}};
+                        if (scalar @{$git_image->{$row->{info}}} == 0) {
+                            print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]}: deleting git image $row->{info}\n" if $gCfg{debug};
                             delete $git_image->{$row->{info}};
-                            delete $image_name->{$s};
                         }
                     }
                 }
                 when (ACTION_PIN) {
-                    my $exported;
-                    my $pinfile = $row->{physname} . '.';
+                    my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
 
                     if (defined $row->{info}) {
                         # this is an unpin
-
-                        # Find the latest version and copy it over...
-                        my $qth = $gCfg{dbh}->prepare('SELECT MAX(version) FROM PhysicalAction '
-                                                      . 'WHERE physname = ? AND timestamp < ? '
-                                                      . 'AND parentphys IS NULL');
-                        $qth->execute($row->{physname}, $row->{timestamp});
-                        my $ver = $qth->fetchall_arrayref()->[0][0];
-                        $exported = &ExportVssPhysFile($row->{physname}, $ver);
-                        $pinfile .= $ver;
                     } else {
                         # this is a pin
                         # There's not a really good way to do this, since
                         # git doesn't suport this, nor do most Linux filesystems.
                         # Find the old version and copy it over...
-                        $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
-                        $pinfile .= $row->{version};
+                        my $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
+                        my $pinfile = $row->{physname} . '.' . $row->{version};
+                        $link_file .= $row->{version};
+                        if (defined $exported && !$simulated && ! -f $link_file) {
+                            if (!copy(File::Spec->catfile($exported, $pinfile), $link_file)) {
+                                print "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                            }
+                        }
                     }
 
-                    if (defined $exported) {
-                        if (!$simulated) {
-                            copy(File::Spec->catfile($exported, $pinfile), $path);
-                            $repo->command('add', '--',  $path);
-                        }
+                    if (!$simulated) {
+                        unlink $path if -f $path; # get rid of pinned/unpinned file
+                        link $link_file, $path;
+                        $repo->command('add', '--',  $path);
                     }
                 }
                 when (ACTION_LABEL) {
@@ -3252,9 +3240,7 @@ sub UpdateGitRepository {
     if ($@) {
         print "An error ($@) occurred\n";
         print "git_image: " . Dumper(\%git_image) . "\n";
-        print "image_name: " . Dumper(\%image_name) . "\n";
         print "row: " . Dumper($row) . "\n";
-        print "data: " . Dumper($image_name->{$git_image->{$row->{physname}}}) . "\n";
         exit(1);
     }
 
@@ -3293,7 +3279,14 @@ sub get_valid_ref_name {
    $
 %x;
 
-    my $tagname = $dlabel;
+    my $tagname;
+
+    if (!defined $dlabel) {
+        $dlabel = "@{[PROGNAME]}-$timestamp"; # better than nothing, I suppose
+        goto GENSYM;
+    } else {
+        $tagname = $dlabel;
+    }
 
     if (defined $label_map->{$dlabel}) {
         $tagname = $label_map->{$dlabel};
@@ -3336,8 +3329,11 @@ sub get_valid_ref_name {
         goto DONE;
     }
 
-    # Time to gensym
-    $tagname = "vss2svn2git_" . $timestamp . "_" . localtime(time);
+    # Give up, gensym
+  GENSYM:
+    my $ug = new Data::UUID;
+    my $uuid = $ug->create_from_name_str(VSS2SVN2GIT_NS, $dlabel);
+    $tagname = "@{[PROGNAME]}_" . $uuid;
 
   DONE:
 
@@ -3390,13 +3386,18 @@ sub GitLabel {
             $tmppath = File::Spec->catdir(@tagnamedir);
         }
 
-        if (!defined $label_map->{$row->{label}}) {
+        if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
             # create a new branch for this label
-            $label_map->{$row->{label}} = $tagname;
+            # undef labels are not recorded in label map
             $repo->command('checkout', '-q', '--orphan',  $tagname);
             $repo->command('config', "branch." . $tagname . ".description",  $row->{comment}); # give it a description
             $repo->command('reset', '--hard'); # unmark all the "new" files from the commit.
-            print "Label `" . $row->{label} . "' is branch `$tagname'.\n";
+            if (defined $row->{label}) {
+                $label_map->{$row->{label}} = $tagname;
+                print "Label `" . $row->{label} . "' is branch `$tagname'.\n";
+            } else {
+                print "undef label is branch `$tagname' at timestamp $row->{timestamp}.\n";
+            }
         } elsif ($branch =~ $master_re) {
             $repo->command('checkout', '-q', $tagname);
         }
@@ -3406,14 +3407,14 @@ sub GitLabel {
 
 # handle different kinds of moves
 sub DoMoveProject {
-    my($repo, $path, $newpath, $image_name, $simulated, $newtest) = @_;
+    my($repo, $path, $newpath, $git_image, $simulated, $newtest) = @_;
 
     if ($simulated) {
-        &MoveProject($path, $newpath, $image_name);
+        &MoveProject($path, $newpath, $git_image);
     } elsif ($newtest ? (! -d $newpath) : (-d $path)) {
         $repo->command('mv',  $path,  $newpath);
         # N.B. inode should _not_ have changed during move
-        &MoveProject($path, $newpath, $image_name);
+        &MoveProject($path, $newpath, $git_image);
     }
 }
 
@@ -3428,23 +3429,29 @@ sub RemoveKeep {
 
 # handle the recover
 sub GitRecover {
-    my($repo, $row, $path, $git_image, $image_name, $simulatedref) = @_;
-    my $simulated = ${$simulatedref};
-    my @statb;
+    my($repo, $row, $path, $git_image, $simulated) = @_;
 
     if ($simulated) {
-        if (!defined $git_image->{$row->{physname}}) {
-            @statb = StatSimulated($simulatedref);
-            $git_image->{$row->{physname}} = $statb[1];
-            $image_name->{$statb[1]} = $path;
+        for ($row->{itemtype}) {
+            when (VSS_PROJECT) {
+                $git_image->{$row->{physname}} = $path;
+            }
+            when (VSS_FILE) {
+                @{$git_image->{$row->{physname}}} = ("$path");
+            }
         }
     } elsif (! -e $path) {
         my $rev = $repo->command_oneline('rev-list', '-n', '1', 'HEAD', '--',  $path);
         $repo->command('checkout', "$rev^", '--',  $path);
 
-        @statb = stat($path);
-        $git_image->{$row->{physname}} = $statb[1];
-        $image_name->{$statb[1]} = $path;
+        for ($row->{itemtype}) {
+            when (VSS_PROJECT) {
+                $git_image->{$row->{physname}} = $path;
+            }
+            when (VSS_FILE) {
+                @{$git_image->{$row->{physname}}} = ("$path");
+            }
+        }
     }
 }
 
@@ -3454,7 +3461,9 @@ sub GitRm {
     # add back the keep file before 'git rm', so we don't have to reset
     # inode bookkeeping
     my $keepfile = File::Spec->catfile($parentpath, KEEP_FILE);
-    copy($gCfg{keepFile}, $keepfile);
+    if (!copy($gCfg{keepFile}, $keepfile)) {
+        print "GitRm: path `$keepfile' copy $!\n";
+    }
 
     $repo->command('rm', ($itemtype == VSS_PROJECT ? '-rf' : '-f'), '-q', '--',  $path);
 
