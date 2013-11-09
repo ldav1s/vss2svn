@@ -3517,7 +3517,7 @@ sub GitLabel {
         } elsif ($branch =~ $master_re) {
             $repo->command('checkout', '-q', $tagname);
         }
-        $repo->command('checkout', 'master', '--',  $tmppath);
+        $repo->command('checkout', '-q', 'master', '--',  $tmppath);
     }
 }
 
