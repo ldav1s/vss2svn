@@ -3164,10 +3164,9 @@ sub UpdateGitRepository {
                                 if (!copy((($action_id) ? $gCfg{destroyedFile} : $gCfg{indeterminateFile}),
                                           $link_file)) {  # touch the file
                                     print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!\n";
-                                } else {
-                                    link $link_file, $path;
                                 }
                             }
+                            link $link_file, $path;
                             $repo->command('add', '--',  $path);
                             &RemoveKeep($repo, $parentpath);
                             @{$git_image->{$row->{physname}}} = ("$path"); # may be on multiple paths
@@ -3193,12 +3192,33 @@ sub UpdateGitRepository {
                                 }
                             }
                         }
+                    } else {
+                        # we have child data, but no parent data (yet)
+                        # read it out for the link
+                        # This step seems to happen chronologically first before
+                        # writing the parent info, so they may be in different timestamps
+                        my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
+                        my $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
+
+                        if (defined $exported) {
+                            # copy the data to the link
+                            if (!$simulated) {
+                                if (!copy(File::Spec->catfile($exported,
+                                                              $row->{physname} . '.' . $row->{version}),
+                                          $link_file)) {
+                                    print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} link path `$link_file' copy $!\n";
+                                }
+                            }
+                        }
+
                     }
                 }
                 when (ACTION_RENAME) {
                     # these are only recorded in the parent
+                    # Files may be renamed after DELETE(!) through a SHARE apparently
+                    # so we need to check for their existence
                     my $newpath = File::Spec->catfile($parentpath, $row->{info});
-                    $repo->command('mv',  $path,  $newpath) if !$simulated;
+                    $repo->command('mv',  $path,  $newpath) if !$simulated && -f $path;
 
                     # remove the old path, add the new path
                     @{$git_image->{$row->{physname}}} = grep {!/^\Q$path\E$/} @{$git_image->{$row->{physname}}};
@@ -3250,7 +3270,7 @@ sub UpdateGitRepository {
                 }
                 when (ACTION_SHARE) {
                     # only recorded in parent (but present in child XML)
-                    my $oldpath = @{$git_image->{$row->{physname}}}[0];
+                    my $oldpath = &SearchForPath($row->{physname}, $git_image);
 
                     if ($simulated) {
                         push @{$git_image->{$row->{physname}}}, $path;
@@ -3264,10 +3284,10 @@ sub UpdateGitRepository {
                 when (ACTION_BRANCH) {
                     # branches recorded in parent and child
                     # no git action required
+                    my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
+
                     if ($row->{parentdata}) {
                         # set up bindings for the new branch
-                        my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
-
                         if ($simulated) {
                             @{$git_image->{$row->{physname}}} = ("$path");
                         } else {
@@ -3287,6 +3307,15 @@ sub UpdateGitRepository {
                         if (scalar @{$git_image->{$row->{info}}} == 0) {
                             print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]}: deleting git image $row->{info}\n" if $gCfg{debug};
                             delete $git_image->{$row->{info}};
+                        }
+                    } elsif (! -f $link_file) {
+                        # for some reason, the parent info is missing
+                        # no parent info to link, just copy the link file
+                        my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
+                        if (!$simulated) {
+                            if (!copy($link_info, $link_file)) { # should create new file
+                                print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                            }
                         }
                     }
                 }
@@ -3518,24 +3547,56 @@ sub RemoveKeep {
 sub GitRecover {
     my($repo, $row, $path, $git_image, $simulated) = @_;
 
+    my ($action_id) = $gCfg{dbh}->selectrow_array("SELECT action_id "
+                                                  . "FROM PhysicalAction "
+                                                  . "WHERE physname = ? AND actiontype = '@{[ACTION_DESTROY]}' "
+                                                  . "LIMIT 1", # just in case
+                                                  undef, $row->{physname});
     if ($simulated) {
         for ($row->{itemtype}) {
             when (VSS_PROJECT) {
-                $git_image->{$row->{physname}} = $path;
+                if (!$action_id) {
+                    $git_image->{$row->{physname}} = $path;
+                }
             }
             when (VSS_FILE) {
                 @{$git_image->{$row->{physname}}} = ("$path");
             }
         }
     } elsif (! -e $path) {
-        my $rev = $repo->command_oneline('rev-list', '-n', '1', 'HEAD', '--',  $path);
-        $repo->command('checkout', "$rev^", '--',  $path);
-
         for ($row->{itemtype}) {
             when (VSS_PROJECT) {
-                $git_image->{$row->{physname}} = $path;
+                # easier to recover from git
+                if (!$action_id) {
+                    my $rev = $repo->command_oneline('rev-list', '-n', '1', 'HEAD', '--',  $path);
+                    $repo->command('checkout', '-q', "$rev^", '--',  $path);
+                    $git_image->{$row->{physname}} = $path;
+                } else {
+                    # XXX don't know what to do here
+                    # probably should do nothing anyway
+                }
             }
             when (VSS_FILE) {
+                my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
+                if (!$action_id) {
+                    # These will exist in git history, bring them back.
+                    # Must do it this way for RENAMEing SHAREd files after DELETE
+                    link $link_file, $path;
+                } else {
+                    if (-f $link_file) {
+                        # we have a backup from history (we were BRANCHed)
+                        link $link_file, $path; # add $path as the new link
+                    } else {
+                        # no history backup, fake it
+                        if (!copy($gCfg{destroyedFile}, $link_file)) {  # touch the file
+                            print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                        } else {
+                            link $link_file, $path;
+                        }
+                    }
+                }
+                $repo->command('add', '--',  $path);
+                &RemoveKeep($repo, dirname($path));
                 @{$git_image->{$row->{physname}}} = ("$path");
             }
         }
@@ -3564,4 +3625,18 @@ sub GitRm {
     } else {
         unlink $keepfile;
     }
+}
+
+sub SearchForPath {
+    my($physname, $git_image) = @_;
+    my $link_file = File::Spec->catfile($gCfg{links}, $physname);
+    my $path;
+
+    if (defined $git_image->{$physname}) {
+        $path = @{$git_image->{$physname}}[0];
+    } elsif (-f $link_file) {
+        $path = $link_file
+    }
+
+    return $path;
 }
