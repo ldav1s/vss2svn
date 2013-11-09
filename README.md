@@ -11,15 +11,20 @@ current vss2svn, I thought it might be better to start with what I
 know.
 
 The idea I've come up with is to use ssphys and it's related tools to
-import the data and retarget the output to git at the IMPORTGIT
-(IMPORTSVN) stage. The scheduling that was done to get it to SVN was
-actually pretty good, but needed a couple of minor fixes.
+import the data. I've actually rewritten the scheduling to work more
+on the PhysicalAction stage.  I still probably need to review the
+original scheduler to see if I can improve mine.  It still does need
+improvement.
 
-The import to git is pretty straightforward.
+Data checks and manipulation are much more SQL intensive now.  I would
+like to move to a current version of SQLite.
+
+Also, I've moved to perl 5.10.1 at least for the time being.  The
+newer version has a few features that made the switch worthwhile.
 
 It'll be important to set up the files to be imported using the
 .gitattributes and .gitignores in the git repository for crlf
-adjustment before starting the import.
+adjustment before starting the import.  I still have not tried this.
 
 This is very experimental right now, and might be kind of broken.
 Also it'll only work on Linux for now, because it supports hard links
