@@ -22,10 +22,6 @@ Module::Build->new
           'Data::Dumper' => 0,
       },
       script_files => { 'script/vss2svn.pl' => 'script/vss2svn.pl', 'ssphys/ssphys' => 'bin/ssphys'},
-      pm_files => { 'script/Vss2Svn/ActionHandler.pm' => 'lib/Vss2Svn/ActionHandler.pm',
-		    'script/Vss2Svn/DataCache.pm' =>  'lib/Vss2Svn/DataCache.pm',
-		    'script/Vss2Svn/GitRepo.pm' =>  'lib/Vss2Svn/GitRepo.pm',
-		    'script/Vss2Svn/SvnRevHandler.pm' =>  'lib/Vss2Svn/SvnRevHandler.pm',
-		    },
+      pm_files => { 'script/Vss2Svn/DataCache.pm' =>  'lib/Vss2Svn/DataCache.pm' },
       PL_files => { 'ssphys/ssphys.PL' => 'bin/ssphys' },
       )->create_build_script;

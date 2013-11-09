@@ -26,10 +26,7 @@ use Fcntl ':mode';
 use Storable qw(dclone);
 
 use lib '.';
-use Vss2Svn::ActionHandler;
 use Vss2Svn::DataCache;
-use Vss2Svn::SvnRevHandler;
-use Vss2Svn::GitRepo;
 use POSIX;
 use Git;
 use Data::Dumper;
@@ -41,15 +38,9 @@ use constant {
     TASK_LOADVSSNAMES => 'LOADVSSNAMES',
     TASK_FINDDBFILES => 'FINDDBFILES',
     TASK_GETPHYSHIST => 'GETPHYSHIST',
-    TASK_MERGEPARENTDATA => 'MERGEPARENTDATA',
-    TASK_MERGEMOVEDATA => 'MERGEMOVEDATA',
     TASK_REMOVETMPCHECKIN => 'REMOVETMPCHECKIN',
     TASK_TESTGITAUTHORINFO => 'TESTGITAUTHORINFO',
-    TASK_MERGEUNPINPIN => 'MERGEUNPINPIN',
-    TASK_BUILDCOMMENTS => 'BUILDCOMMENTS',
-    TASK_BUILDACTIONHIST => 'BUILDACTIONHIST',
     TASK_GITREAD => 'GITREAD',
-    TASK_IMPORTGIT => 'IMPORTGIT',
     TASK_DONE => 'DONE',
 };
 
@@ -65,6 +56,9 @@ use constant {
     VSS2SVN2GIT_NS => 'ns:vss2svn2git',
     PROGNAME => 'vss2svn2git',
     PROGNAME_URL => 'https://github.com/ldav1s/vss2svn',
+    VSSDB_ROOT => 'AAAAAAAA',
+    ISO8601_FMT => '%Y-%m-%dT%H:%M:%S',
+    MINMAX_TIME_FMT => '%Y-%m-%d',
 };
 
 use constant {
@@ -152,39 +146,6 @@ my @joblist =
          task => TASK_GITREAD,
          handler => \&GitReadImage,
      },
-
-#     # Merge data from parent records into child records where possible
-#     {
-#         task => TASK_MERGEPARENTDATA,
-#         handler => \&MergeParentData,
-#     },
-#
-#     # Merge data from move actions
-#     {
-#         task => TASK_MERGEMOVEDATA,
-#         handler => \&MergeMoveData,
-#     },
-#     # Remove unnecessary Unpin/pin activities
-#     {
-#         task => TASK_MERGEUNPINPIN,
-#         handler => \&MergeUnpinPinData,
-#     },
-#     # Rebuild possible missing comments
-#     {
-#         task => TASK_BUILDCOMMENTS,
-#         handler => \&BuildComments,
-#     },
-#     # Take the history of physical actions and convert them to VSS
-#     # file actions
-#     {
-#         task => TASK_BUILDACTIONHIST,
-#         handler => \&BuildVssActionHistory,
-#     },
-#     # import to repository
-#     {
-#         task => TASK_IMPORTGIT,
-#         handler => \&ImportToGit,
-#     },
      # done state
      {
          task    => TASK_DONE,
@@ -225,7 +186,7 @@ sub RunConversion {
         $info = $joblist[$i];
 
         print "TASK: $gCfg{task}: "
-            . POSIX::strftime(Vss2Svn::GitRepo::ISO8601_FMT . "\n", localtime) . "\n";
+            . POSIX::strftime(ISO8601_FMT . "\n", localtime) . "\n";
         push @{ $gCfg{tasks} }, $gCfg{task};
 
         if ($gCfg{prompt}) {
@@ -283,6 +244,8 @@ ENTRY:
     }
 
     $cache->commit();
+
+    1;
 }  #  End LoadVssNames
 
 ###############################################################################
@@ -315,6 +278,7 @@ sub FindPhysDbFiles {
 
     $cache->commit();
 
+    1;
 }  #  End FindPhysDbFiles
 
 ###############################################################################
@@ -342,6 +306,7 @@ sub GetPhysVssHistory {
 
     $cache->commit();
 
+    1;
 }  #  End GetPhysVssHistory
 
 ###############################################################################
@@ -368,7 +333,7 @@ sub GetVssPhysInfo {
 
     for ($iteminfo->{Type}) {
         when (VSS_PROJECT) {
-            $parentphys = (uc($physname) eq Vss2Svn::ActionHandler::VSSDB_ROOT)?
+            $parentphys = (uc($physname) eq VSSDB_ROOT)?
                 '' : &GetProjectParent($xml);
         }
         when (VSS_FILE) { $parentphys = undef; }
@@ -522,7 +487,7 @@ VERSION:
             $comment =~ s/\s+$//s;
         }
 
-        if ($itemtype == VSS_PROJECT && uc($physname) eq Vss2Svn::ActionHandler::VSSDB_ROOT
+        if ($itemtype == VSS_PROJECT && uc($physname) eq VSSDB_ROOT
             && ref($tphysname)) {
 
             $tphysname = $physname;
@@ -844,315 +809,6 @@ EOT
 }
 
 ###############################################################################
-#  MergeParentData
-###############################################################################
-sub MergeParentData {
-    # VSS has a funny way of not placing enough information to rebuild history
-    # in one data file; for example, renames are stored in the parent project
-    # rather than in that item's data file. Also, it's sometimes impossible to
-    # tell from a child record which was eventually shared to multiple folders,
-    # which folder it was originally created in.
-
-    # So, at this stage we look for any parent records which described child
-    # actions, then update those records with data from the child objects. We
-    # then delete the separate child objects to avoid duplication.
-
-    &StopConversion;
-
-
-    my($sth, $rows, $row);
-    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalAction '
-                               . 'WHERE parentdata > 0');
-    $sth->execute();
-
-    # need to pull in all recs at once, since we'll be updating/deleting data
-    $rows = $sth->fetchall_arrayref( {} );
-
-    my($childrecs, $child, $id, $depth);
-    my @delchild = ();
-
-    foreach $row (@$rows) {
-        $childrecs = &GetChildRecs($row);
-
-        if (scalar @$childrecs > 1) {
-            &ThrowWarning("Multiple child recs for parent rec "
-                          . "'$row->{action_id}'");
-        }
-
-        $depth = &GetPathDepth($row);
-
-        foreach $child (@$childrecs) {
-            &UpdateParentRec($row, $child);
-            push(@delchild, $child->{action_id});
-        }
-    }
-
-    if (scalar @delchild > 0) {
-        # just numbers here, no need to quote
-        my $in_clause = join q{,}, @delchild;
-        $gCfg{dbh}->do("DELETE FROM PhysicalAction WHERE action_id IN ($in_clause)");
-    }
-
-    1;
-
-}  #  End MergeParentData
-
-###############################################################################
-#  GetPathDepth
-###############################################################################
-sub GetPathDepth {
-    my($row) = @_;
-
-    # If we've already worked out the depth of this row, return it immediately
-    if ($row->{parentdata} > 1) {
-        return $row->{parentdata};
-    }
-
-    my($maxParentDepth, $depth, $parents, $parent);
-
-    # Get the row(s) corresponding to the parent(s) of this row, and work out
-    # the maximum depth
-
-    my $sql = <<"EOSQL";
-SELECT
-    *
-FROM
-    PhysicalAction
-WHERE
-    parentdata > 0
-    AND physname = ?
-    AND actiontype = ?
-    AND timestamp <= ?
-EOSQL
-
-    my $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute( @{ $row }{qw(parentphys actiontype timestamp)} );
-
-    $parents =  $sth->fetchall_arrayref( {} );
-    $maxParentDepth = 0;
-    foreach $parent (@$parents) {
-        $depth = &GetPathDepth($parent);
-        $maxParentDepth = ($depth > $maxParentDepth) ? $depth : $maxParentDepth;
-    }
-
-    # Depth of this path becomes one more than the maximum parent depth
-    $depth = $maxParentDepth + 1;
-
-    # Update the row for this record
-    &UpdateDepth($row, $depth);
-
-    return $depth;
-}  #  End GetPathDepth
-
-###############################################################################
-#  UpdateDepth
-###############################################################################
-sub UpdateDepth {
-    my($row, $depth) = @_;
-
-    my $sql = <<"EOSQL";
-UPDATE
-    PhysicalAction
-SET
-    parentdata = ?
-WHERE
-    action_id = ?
-EOSQL
-
-    my $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute( $depth, $row->{action_id} );
-
-}  #  End UpdateDepth
-
-###############################################################################
-#  GetChildRecs
-###############################################################################
-sub GetChildRecs {
-    my($parentrec, $parentdata) = @_;
-
-    # Here we need to find any child rows which give us additional info on the
-    # parent rows. There's no definitive way to find matching rows, but joining
-    # on physname, actiontype, timestamp, and author gets us close. The problem
-    # is that the "two" actions may not have happened in the exact same second,
-    # so we need to also look for any that are some time apart and hope
-    # we don't get the wrong row.
-
-    $parentdata = 0 unless defined $parentdata;
-    $parentdata = 1 if $parentdata != 0;
-
-    my $sql = <<"EOSQL";
-SELECT
-    *
-FROM
-    PhysicalAction
-WHERE
-    MIN(parentdata, 1) = ?
-    AND physname = ?
-    AND actiontype = ?
-    AND author = ?
-ORDER BY
-    ABS(? - timestamp)
-EOSQL
-
-    my $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute( $parentdata, @{ $parentrec }{qw(physname actiontype author timestamp)} );
-
-    return $sth->fetchall_arrayref( {} );
-}  #  End GetChildRecs
-
-###############################################################################
-#  UpdateParentRec
-###############################################################################
-sub UpdateParentRec {
-    my($row, $child) = @_;
-
-    # The child record has the "correct" version number (relative to the child
-    # and not the parent), as well as the comment info and whether the file is
-    # binary
-
-    my $comment;
-
-    {
-        no warnings 'uninitialized';
-        $comment = "$row->{comment}\n$child->{comment}";
-        $comment =~ s/^\n+//;
-        $comment =~ s/\n+$//;
-    }
-
-    my $sql = <<"EOSQL";
-UPDATE
-    PhysicalAction
-SET
-    version = ?,
-    is_binary = ?,
-    comment = ?
-WHERE
-    action_id = ?
-EOSQL
-
-    my $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute( $child->{version}, $child->{is_binary}, $comment,
-                  $row->{action_id} );
-
-}  #  End UpdateParentRec
-
-###############################################################################
-#  MergeMoveData
-###############################################################################
-sub MergeMoveData {
-    # Similar to the MergeParentData, the MergeMove Data combines two the src
-    # and target move actions into one move action. Since both items are parents
-    # the MergeParentData function can not deal with this specific problem
-
-    my($sth, $rows, $row);
-
-    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalAction '
-                               . "WHERE actiontype = '" . ACTION_MOVE_FROM . "'");
-    $sth->execute();
-
-    # need to pull in all recs at once, since we'll be updating/deleting data
-    $rows = $sth->fetchall_arrayref( {} );
-
-    my($childrecs, $child, $id);
-
-    foreach $row (@$rows) {
-        $row->{actiontype} = ACTION_MOVE_TO;
-        $childrecs = &GetChildRecs($row, 1);
-
-        my $source = undef;
-        my $target = $row->{parentphys};
-
-        my $chosenChildRecord;
-        my $childRecord;
-
-        foreach $childRecord (@$childrecs) {
-            if (!(defined $chosenChildRecord)
-                && $childRecord->{timestamp} == $row->{timestamp}
-                && !($childRecord->{parentphys} eq $row->{parentphys})) {
-
-                $chosenChildRecord = $childRecord;
-            }
-        }
-
-        if (defined $chosenChildRecord) {
-            $source = $chosenChildRecord->{parentphys};
-            $gCfg{dbh}->do("DELETE FROM PhysicalAction WHERE action_id IN ($chosenChildRecord->{action_id})");
-
-            my $sql = <<"EOSQL";
-UPDATE
-    PhysicalAction
-SET
-    actiontype = 'MOVE',
-    parentphys = ?,
-    info = ?
-WHERE
-    action_id = ?
-EOSQL
-            my $update;
-            $update = $gCfg{dbh}->prepare($sql);
-
-            $update->execute( $target, $source, $row->{action_id});
-        } else {
-            #the record did not have a matching MOVE_TO. call it a RESTORE
-            print "Changing $row->{action_id} to a @{[ACTION_RESTORE]}\n";
-
-            my $sql = <<"EOSQL";
-UPDATE
-    PhysicalAction
-SET
-    actiontype = '@{[ACTION_RESTORE]}'
-WHERE
-    action_id = ?
-EOSQL
-            my $update;
-            $update = $gCfg{dbh}->prepare($sql);
-
-            $update->execute( $row->{action_id});
-        }
-    }
-
-
-    # change all remaining MOVE_TO records into MOVE records and swap the src and target
-    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalAction '
-                               . "WHERE actiontype = '" . ACTION_MOVE_TO . "'");
-    $sth->execute();
-    $rows = $sth->fetchall_arrayref( {} );
-
-    foreach $row (@$rows) {
-        my $update;
-        $update = $gCfg{dbh}->prepare('UPDATE PhysicalAction SET '
-                                      . 'actiontype = "MOVE", '
-                                      . 'parentphys = ?, '
-                                      . 'info = ? '
-                                      . 'WHERE action_id = ?');
-        $update->execute($row->{info}, $row->{parentphys}, $row->{action_id});
-    }
-
-    $sth = $gCfg{dbh}->prepare("SELECT * FROM PhysicalAction WHERE actiontype = '" . ACTION_RESTORE . "'");
-    $sth->execute();
-    $rows = $sth->fetchall_arrayref( {} );
-
-    foreach $row (@$rows) {
-        #calculate last name of this file. Store it in $info
-
-        my $sql = "SELECT * FROM PhysicalAction WHERE physname = ? AND timestamp < ? ORDER BY timestamp DESC";
-
-        $sth = $gCfg{dbh}->prepare($sql);
-        $sth->execute( $row->{physname}, $row->{timestamp} );
-
-        my $myOlderRecords = $sth->fetchall_arrayref( {} );
-
-        if (scalar @$myOlderRecords > 0) {
-            my $update = $gCfg{dbh}->prepare('UPDATE PhysicalAction SET info = ? WHERE action_id = ?');
-            $update->execute(@$myOlderRecords[0]->{itemname}, $row->{action_id});
-        }
-    }
-
-    1;
-
-}  #  End MergeMoveData
-
-###############################################################################
 # RemoveTemporaryCheckIns
 # remove temporary checkins that where create to detect MS VSS capabilities
 ###############################################################################
@@ -1175,300 +831,8 @@ EOSQL
 }
 
 ###############################################################################
-#  MergeUnpinPinData
-###############################################################################
-sub MergeUnpinPinData {
-    my($sth, $rows, $row, $r, $next_row);
-    my $sql = 'SELECT * FROM PhysicalAction ORDER BY timestamp ASC, '
-                . 'itemtype ASC, priority ASC, parentdata ASC, sortkey ASC, action_id ASC';
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute();
-
-    # need to pull in all recs at once, since we'll be updating/deleting data
-    $rows = $sth->fetchall_arrayref( {} );
-
-    return if ($rows == -1);
-    return if (@$rows < 2);
-
-    my @delchild = ();
-
-    for $r (0 .. @$rows-2) {
-        $row = $rows->[$r];
-
-        if ($row->{actiontype} eq ACTION_PIN && !defined $row->{version}) # UNPIN
-        {
-            # Search for a matching pin action
-            my $u;
-            for ($u = $r+1; $u <= @$rows-2; $u++) {
-                $next_row = $rows->[$u];
-
-                if (   $next_row->{actiontype} eq ACTION_PIN
-                    && defined $next_row->{version}   # PIN
-                    && $row->{physname} eq $next_row->{physname}
-                    && $row->{parentphys} eq $next_row->{parentphys}
-#                    && $next_row->{timestamp} - $row->{timestamp} < 60
-#                    && $next_row->{action_id} - $row->{action_id} == 1
-                    ) {
-                        print "found UNPIN/PIN combination for $row->{parentphys}/$row->{physname}"
-                            . "($row->{itemname}) @ ID $row->{action_id}\n"  if $gCfg{verbose};
-
-                        # if we have a unpinFromVersion number copy this one to the PIN handler
-                        if (defined $row->{info})
-                        {
-                            my $sql2 = "UPDATE PhysicalAction SET info = ? WHERE action_id = ?";
-                            my $sth2 = $gCfg{dbh}->prepare($sql2);
-                            $sth2->execute($row->{info}, $next_row->{action_id});
-                        }
-
-                        push (@delchild, $row->{action_id});
-                    }
-
-                # if the next action is anything else than a pin stop the search
-                $u = @$rows if ($next_row->{actiontype} ne ACTION_PIN );
-            }
-        }
-    }
-
-    if (scalar @delchild > 0) {
-        # just numbers here, no need to quote
-        my $in_clause = join q{,}, @delchild;
-        $gCfg{dbh}->do("DELETE FROM PhysicalAction WHERE action_id IN ($in_clause)");
-    }
-
-    1;
-
-}  #  End MergeUnpinPinData
-
-###############################################################################
-#  BuildComments
-###############################################################################
-sub BuildComments {
-    my($sth, $rows, $row, $r, $next_row);
-    my $sql = "SELECT * FROM PhysicalAction WHERE actiontype='@{[ACTION_PIN]}' AND itemtype=@{[VSS_FILE]} ORDER BY physname ASC";
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute();
-
-    # need to pull in all recs at once, since we'll be updating/deleting data
-    $rows = $sth->fetchall_arrayref( {} );
-
-    foreach $row (@$rows) {
-
-        # technically we have the following situations:
-        # PIN only: we come from the younger version and PIN to a older one: the
-        #     younger version is the currenty version of the timestamp of the PIN action
-        # UNPIN only: we unpin from a older version to the current version, the
-        #     timestamp of the action will again define the younger version
-        # UNPIN/PIN with known UNPIN version: we merge from UNPIN version to PIN version
-        # UNPIN/PIN with unknown UNPIN version: we are lost in this case and we
-        #     can not distinguish this case from the PIN only case.
-
-        my $sql2;
-        my $prefix;
-
-        # PIN only
-        if (    defined $row->{version}     # PIN version number
-            && !defined $row->{info}) {     # no UNPIN version number
-            $sql2 = 'SELECT * FROM PhysicalAction'
-                    . ' WHERE physname="' . $row->{physname} . '"'
-                    . '      AND parentphys ISNULL'
-                    . '      AND itemtype=' . VSS_FILE
-                    . '      AND version>=' . $row->{version}
-                    . '      AND timestamp<=' . $row->{timestamp}
-                    . ' ORDER BY version DESC';
-            $prefix = "reverted changes for: \n";
-        }
-
-        # UNPIN only
-        if (   !defined $row->{version}     # no PIN version number
-            &&  defined $row->{info}) {     # UNPIN version number
-            $sql2 = 'SELECT * FROM PhysicalAction'
-                    . ' WHERE physname="' .  $row->{physname} . '"'
-                    . '      AND parentphys ISNULL'
-                    . '      AND itemtype=' . VSS_FILE
-                    . '      AND timestamp<=' . $row->{timestamp}
-                    . '      AND version>' . $row->{info}
-                    . ' ORDER BY version ASC';
-        }
-
-        # UNPIN/PIN
-        if (    defined $row->{version}     # PIN version number
-            &&  defined $row->{info}) {     # UNPIN version number
-            $sql2 = 'SELECT * FROM PhysicalAction'
-                    . ' WHERE physname="' . $row->{physname} . '"'
-                    . '      AND parentphys ISNULL'
-                    . '      AND itemtype=' . VSS_FILE
-                    . '      AND version>' . $row->{info}
-                    . '      AND version<=' . $row->{version}
-                    . ' ORDER BY version ';
-
-            if ($row->{info} > $row->{version}) {
-                $sql2 .= "DESC";
-                $prefix = "reverted changes for: \n";
-            }
-            else {
-                $sql2 .= "ASC";
-            }
-
-        }
-
-        next if !defined $sql2;
-
-        my $sth2 = $gCfg{dbh}->prepare($sql2);
-        $sth2->execute();
-
-        my $comments = $sth2->fetchall_arrayref( {} );
-        my $comment;
-        print "merging comments for $row->{physname}" if $gCfg{verbose};
-        print " from $row->{info}" if ($gCfg{verbose} && defined $row->{info});
-        print " to $row->{version}" if ($gCfg{verbose} && defined $row->{version});
-        print "\n" if $gCfg{verbose};
-
-        foreach my $c(@$comments) {
-            print " $c->{version}: $c->{comment}\n" if $gCfg{verbose};
-            $comment .= $c->{comment} . "\n";
-            $comment =~ s/^\n+//;
-            $comment =~ s/\n+$//;
-        }
-
-        if (defined $comment && !defined $row->{comment}) {
-            $comment = $prefix . $comment if defined $prefix;
-            $comment =~ s/"/""/g;
-            my $sql3 = 'UPDATE PhysicalAction SET comment="' . $comment . '" WHERE action_id = ' . $row->{action_id};
-            my $sth3 = $gCfg{dbh}->prepare($sql3);
-            $sth3->execute();
-        }
-    }
-    1;
-
-}  #  End BuildComments
-
-###############################################################################
-#  BuildVssActionHistory
-###############################################################################
-sub BuildVssActionHistory {
-    my $vsscache = Vss2Svn::DataCache->new('VssAction', 1)
-        || &ThrowError("Could not create cache 'VssAction'");
-
-    my $joincache = Vss2Svn::DataCache->new('SvnRevisionVssAction')
-        || &ThrowError("Could not create cache 'SvnRevisionVssAction'");
-
-    my $labelcache = Vss2Svn::DataCache->new('Label')
-        || &ThrowError("Could not create cache 'Label'");
-
-    # This will keep track of the current SVN revision, and increment it when
-    # the author or comment changes, the timestamps span more than an hour
-    # (by default), or the same physical file is affected twice
-
-    my $svnrevs = Vss2Svn::SvnRevHandler->new()
-        || &ThrowError("Could not create SVN revision handler");
-    $svnrevs->{verbose} = $gCfg{verbose};
-
-    my($sth, $row, $action, $handler, $physinfo, $itempaths, $allitempaths);
-
-    my $sql = 'SELECT * FROM PhysicalAction ORDER BY timestamp ASC, '
-            . 'itemtype ASC, priority ASC, parentdata ASC, sortkey ASC, action_id ASC';
-
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute();
-
-ROW:
-    while(defined($row = $sth->fetchrow_hashref() )) {
-        $action = $row->{actiontype};
-
-        $handler = Vss2Svn::ActionHandler->new($row);
-        $handler->{verbose} = $gCfg{verbose};
-        $physinfo = $handler->physinfo();
-
-        if (defined($physinfo) && $physinfo->{type} != $row->{itemtype} ) {
-            &ThrowWarning("Inconsistent item type for '$row->{physname}'; "
-                        . "'$row->{itemtype}' unexpected");
-            next ROW;
-        }
-
-        $row->{itemname} = Encode::decode_utf8( $row->{itemname} );
-        $row->{info} = Encode::decode_utf8( $row->{info} );
-        $row->{comment} = Encode::decode_utf8( $row->{comment} );
-        $row->{author} = Encode::decode_utf8( $row->{author} );
-        $row->{label} = Encode::decode_utf8( $row->{label} );
-
-        # The handler's job is to keep track of physical-to-real name mappings
-        # and return the full item paths corresponding to the physical item. In
-        # case of a rename, it will return the old name, so we then do another
-        # lookup on the new name.
-
-        # Commits and renames can apply to multiple items if that item is
-        # shared; since SVN has no notion of such shares, we keep track of
-        # those ourself and replicate the functionality using multiple actions.
-
-        if (!$handler->handle($action)) {
-            &ThrowWarning($handler->{errmsg})
-                if $handler->{errmsg};
-            next ROW;
-        }
-
-        $itempaths = $handler->{itempaths};
-
-        # In cases of a corrupted share source, the handler may change the
-        # action from ACTION_SHARE to ACTION_ADD
-        $row->{actiontype} = $handler->{action};
-
-        if (!defined $itempaths) {
-            # Couldn't determine name of item
-            &ThrowWarning($handler->{errmsg})
-                if $handler->{errmsg};
-
-            # If we were adding or modifying a file, commit it to lost+found;
-            # otherwise give up on it
-            if ($row->{itemtype} == VSS_FILE && ($row->{actiontype} eq ACTION_ADD ||
-                $row->{actiontype} eq ACTION_COMMIT)) {
-
-                $itempaths = [undef];
-            } else {
-                next ROW;
-            }
-        }
-
-        # we need to check for the next rev number, after all paths that can
-        # prematurely call the next row. Otherwise, we get an empty revision.
-        $svnrevs->check($row);
-
-        # May contain add'l info for the action depending on type:
-        # RENAME: the new name (without path)
-        # SHARE: the source path which was shared
-        # MOVE: the old path
-        # PIN: the path of the version that was pinned
-        # LABEL: the name of the label
-        $row->{info} = $handler->{info};
-
-        # The version may have changed
-        if (defined $handler->{version}) {
-            $row->{version} = $handler->{version};
-        }
-
-        $allitempaths = join("\t", @$itempaths);
-        $row->{itempaths} = $allitempaths;
-
-        $vsscache->add(@$row{ qw(parentphys physname version actiontype itempaths
-                             itemtype is_binary info) });
-        $joincache->add( $svnrevs->{revnum}, $vsscache->{pkey} );
-
-        if (defined $row->{label}) {
-            $labelcache->add(@$row{ qw(physname version label itempaths) });
-        }
-
-    }
-
-    $vsscache->commit();
-    $svnrevs->commit();
-    $joincache->commit();
-    $labelcache->commit();
-
-}  #  End BuildVssActionHistory
-
-###############################################################################
 #  CheckForDestroy
 ###############################################################################
-
 sub CheckForDestroy {
     my($exportdir, $physname, $version, $destroyonly) = @_;
     my($row, $physpath, $rowd);
@@ -1516,99 +880,6 @@ sub CheckForDestroy {
     }
     return $physpath;
 }
-
-###############################################################################
-#  ImportToGit
-###############################################################################
-sub ImportToGit {
-
-    my($sql, $sth, $action_sth, $row, $revision, $actions, $action, $physname, $itemtype);
-    my $repo = Git->repository(Directory => "$gCfg{repo}");
-    my %exported = ();
-
-    $sql = 'SELECT * FROM SvnRevision ORDER BY revision_id ASC';
-
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute();
-
-    $sql = <<"EOSQL";
-SELECT * FROM
-    VssAction
-WHERE action_id IN
-    (SELECT action_id FROM SvnRevisionVssAction WHERE revision_id = ?)
-ORDER BY action_id
-EOSQL
-
-    $action_sth = $gCfg{dbh}->prepare($sql);
-
-    $sql = <<"EOSQL";
-SELECT MAX(version) FROM
-    VssAction
-WHERE physname = ?
- AND action_id < ?
-EOSQL
-
-    my $rename_sth = $gCfg{dbh}->prepare($sql);
-
-    my $gitrepo = Vss2Svn::GitRepo->new($repo, $gCfg{repo}, $gCfg{author_info});
-
-REVISION:
-    while(defined($row = $sth->fetchrow_hashref() )) {
-
-        my $t0 = new Benchmark;
-
-        $revision = $row->{revision_id};
-        $gitrepo->begin_revision($row);
-
-
-        $action_sth->execute($revision);
-        $actions = $action_sth->fetchall_arrayref( {} );
-
-ACTION:
-        foreach $action(@$actions) {
-            $physname = $action->{physname};
-            $itemtype = $action->{itemtype};
-
-            my $version = $action->{version};
-            if (   !defined $version
-                   && (   $action->{action} eq ACTION_ADD
-                          || $action->{action} eq ACTION_COMMIT)) {
-                &ThrowWarning("'$physname': no version specified for retrieval");
-
-                # fall through and try with version 1.
-                $version = 1;
-            }
-
-            if ($itemtype == VSS_FILE && defined $version) {
-                if ($action->{action} eq ACTION_RENAME) {
-                    # version is wrong, step back to the previous action_id version
-                    $rename_sth->execute($physname, $action->{action_id});
-                    $version = $rename_sth->fetchall_arrayref()->[0][0];
-                }
-                $exported{$physname} = &ExportVssPhysFile($physname, $version);
-            } else {
-                $exported{$physname} = undef;
-            }
-
-            # do_action needs to know the revision_id, so paste it on
-            $action->{revision_id} = $revision;
-            $gitrepo->do_action($action, $exported{$physname});
-        }
-        print "revision $revision: ", timestr(timediff(new Benchmark, $t0)),"\n"
-            if $gCfg{timing};
-
-        $gitrepo->commit();
-    }
-
-    my @err = @{ $gitrepo->{errors} };
-
-    if (scalar @err > 0) {
-        map { &ThrowWarning($_) } @err;
-    }
-
-    $gitrepo->finish();
-
-}  #  End ImportToGit
 
 ###############################################################################
 #  ExportVssPhysFile
@@ -1804,7 +1075,7 @@ EOSQL
     $maxtime = $gCfg{maxtime};
 
     foreach($mintime, $maxtime) {
-        $_ = POSIX::strftime("%Y-%m-%d", localtime($_));
+        $_ = POSIX::strftime(MINMAX_TIME_FMT, localtime($_));
     }
 
     # initial creation of the repo wasn't considered an action or revision
@@ -1917,17 +1188,9 @@ sub ThrowError {
 ###############################################################################
 sub StopConversion {
     &DisconnectDatabase;
-    &CloseAllFiles;
 
     exit(1);
 }  #  End StopConversion
-
-###############################################################################
-#  CloseAllFiles
-###############################################################################
-sub CloseAllFiles {
-
-}  #  End CloseAllFiles
 
 ###############################################################################
 #  SetSystemTask
@@ -2032,8 +1295,6 @@ sub SetupGlobals {
     Vss2Svn::DataCache->SetCacheDir($gCfg{tempdir});
     Vss2Svn::DataCache->SetDbHandle($gCfg{dbh});
     Vss2Svn::DataCache->SetVerbose($gCfg{verbose});
-
-    Vss2Svn::SvnRevHandler->SetRevTimeRange($gCfg{revtimerange});
 
 }  #  End SetupGlobals
 
@@ -2318,9 +1579,7 @@ sub Initialize {
     }
 
     # set up these items now
-    my @statb = stat($gCfg{repo});
-
-    $git_image{Vss2Svn::ActionHandler::VSSDB_ROOT} = $gCfg{repo};
+    $git_image{"@{[VSSDB_ROOT]}"} = $gCfg{repo};
 
     if (! -d $gCfg{vssdatadir}) {
         die "The VSS database '$gCfg{vssdir}' "
@@ -2366,7 +1625,7 @@ sub Initialize {
     $gCfg{ssphysout} = File::Spec->catfile($gCfg{tempdir}, 'ssphysout');
     $gCfg{encoding} = ENCODING if !defined($gCfg{encoding});
 
-    # Commit messages for SVN placed here.
+    # All sorts of working data placed here
     mkdir $gCfg{tempdir} unless (-d $gCfg{tempdir});
 
     # Directories for holding VSS revisions
@@ -2400,6 +1659,9 @@ sub Initialize {
 
     &ConfigureXmlParser();
 
+    # Files for various puposes.  The 'keep' file is to
+    # force git to keep directory files with no other files
+    # in them around.
     $gCfg{keepFile} = File::Spec->catfile($gCfg{tempdir}, KEEP_FILE);
     $gCfg{destroyedFile} = File::Spec->catfile($gCfg{tempdir},'destroyed.txt');
     $gCfg{deletedFile} = File::Spec->catfile($gCfg{tempdir},'deleted.txt');
@@ -2655,7 +1917,7 @@ sub SchedulePhysicalActions {
       ROW:
         foreach my $row (@$rows) {
             if ($index == 0
-                && $row->{physname} eq Vss2Svn::ActionHandler::VSSDB_ROOT
+                && $row->{physname} eq VSSDB_ROOT
                 && $row->{actiontype} eq ACTION_ADD
                 && $row->{itemname} eq "") {
                 # first time through, setting up the VSS root project
@@ -3481,7 +2743,7 @@ sub git_setenv {
 
     $ENV{'GIT_AUTHOR_NAME'} = $map->{name};
     $ENV{'GIT_AUTHOR_EMAIL'} = $map->{email};
-    $ENV{'GIT_AUTHOR_DATE'} = POSIX::strftime("%Y-%m-%dT%H:%M:%S", localtime($timestamp));
+    $ENV{'GIT_AUTHOR_DATE'} = POSIX::strftime(ISO8601_FMT, localtime($timestamp));
 }
 
 # create or checkout a branch for a label and add files to it from master
