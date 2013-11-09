@@ -1905,6 +1905,7 @@ sub SchedulePhysicalActions {
 
         $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
 
+        my $startover_count = 0;
         # We may end up here a few times as we schedule
       STARTOVER:
         # deep clone these so we can simulate
@@ -1913,6 +1914,9 @@ sub SchedulePhysicalActions {
         # start scheduling
         $sth->execute();
         $rows = $sth->fetchall_arrayref( {} );
+
+        # This seems to be a kind of insertion sort, give it a bound
+        die "failed to schedule too many times" if $startover_count > ((scalar @$rows)*(scalar @$rows));
 
       ROW:
         foreach my $row (@$rows) {
@@ -1938,7 +1942,10 @@ sub SchedulePhysicalActions {
                 my $rescheduled = 0;
                 if (!defined $giti->{$row->{parentphys}}) {
                     # we are out of schedule
-#                print "out of order: parentphys " . $row->{parentphys} . " physname: " . $row->{physname} . "\n";
+
+#                    print "out of order: parentphys " . $row->{parentphys} . " physname: " . $row->{physname} . "\n";
+#                    print "giti: " . Dumper($giti) . "\n";
+
                     if ($row->{actiontype} eq ACTION_ADD || $row->{actiontype} eq ACTION_SHARE) {
                         # we are added out of schedule
                         my $tth;
@@ -1996,6 +2003,7 @@ sub SchedulePhysicalActions {
                                                . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * "
                                                . "FROM tmp ORDER by schedule_id");
                                 $gCfg{dbh}->do('DROP TABLE tmp');
+                                ++$startover_count;
                                 goto STARTOVER;
                             }
                             undef $max_sched;
@@ -2029,7 +2037,7 @@ sub SchedulePhysicalActions {
                         my $idx2 = 0;
                         foreach my $o (@ooo_ids) {
                             my $j = ($ooo_ids[0]+$idx);
-                            print "out of order: $j $o\n";
+                            print "out of order: $j $o\n" if $gCfg{debug};
 
                             my $rv = $gCfg{dbh}->do("UPDATE tmp SET schedule_id=$j WHERE schedule_id = $o "
                                                     ."AND action_id = " . $action_ids[$idx2]);
@@ -2065,6 +2073,7 @@ sub SchedulePhysicalActions {
                     }
                     if ($rescheduled) {
 #                    print "rescheduling " . $row->{actiontype} . " for " . $row->{parentphys} . "\n";
+                        ++$startover_count;
                         goto STARTOVER;
                     }
                 }
