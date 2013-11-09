@@ -2888,6 +2888,7 @@ sub GetOneChangeset {
     }
 
     # dump all entries incuding and after the first mismatch of comments
+    # N.B. comments may be NULL
     # Again, it's at least two changesets in this case.
     # parentdata = 0 means that there could be comments there.
     ($schedule_id) = $gCfg{dbh}->selectrow_array('SELECT MIN(B.schedule_id) '
@@ -2895,7 +2896,11 @@ sub GetOneChangeset {
                                                  . '      WHERE parentdata = 0 ORDER BY schedule_id LIMIT 1) AS A '
                                                  . 'CROSS JOIN (SELECT schedule_id, comment FROM PhysicalActionSchedule '
                                                  . '            WHERE parentdata = 0) AS B '
-                                                 . 'WHERE A.comment != B.comment');
+                                                 . 'WHERE (A.comment IS NULL AND B.comment IS NOT NULL '
+                                                 . '       OR A.comment IS NOT NULL AND B.comment IS NULL '
+                                                 . '       OR A.comment IS NOT NULL AND B.comment IS NOT NULL '
+                                                 . '          AND A.comment != B.comment)');
+
     if ($schedule_id) {
         $isth->execute($schedule_id);
         $dsth->execute($schedule_id);
@@ -2911,7 +2916,36 @@ sub GetOneChangeset {
         }
     }
 
+    # Label filter part 1
+    # When the first item on the schedule is (or is not) a LABEL, remove the first
+    # non-LABEL (or LABEL) from the schedule and any subsequent entries
+
+    ($schedule_id) = $gCfg{dbh}->selectrow_array("SELECT MIN(B.schedule_id) "
+                                                 . "FROM (SELECT actiontype FROM PhysicalActionSchedule "
+                                                 . "      WHERE parentdata = 0 ORDER BY schedule_id LIMIT 1) AS A "
+                                                 . "CROSS JOIN (SELECT schedule_id, actiontype FROM PhysicalActionSchedule "
+                                                 . "            WHERE parentdata = 0) AS B "
+                                                 . "WHERE (A.actiontype = '@{[ACTION_LABEL]}' "
+                                                 . "       AND B.actiontype != '@{[ACTION_LABEL]}') "
+                                                 . "   OR (A.actiontype != '@{[ACTION_LABEL]}' "
+                                                 . "       AND B.actiontype = '@{[ACTION_LABEL]}')");
+    if ($schedule_id) {
+        $isth->execute($schedule_id);
+        $dsth->execute($schedule_id);
+    }
+
+    if ($gCfg{debug}) {
+        ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
+        my $msg = "scheduling label pre ";
+        if ($schedule_id) {
+            print "$msg $schedule_id rows: $dbgcnt\n";
+        } else {
+            print "$msg undef rows: $dbgcnt\n";
+        }
+    }
+
     # dump all entries incuding and after the first mismatch of labels
+    # N.B. labels may be NULL
     # Again, it's at least two labels. Even though there are no changes,
     # in a label how we are handling labels makes separating differing
     # labels into a changeset important.
@@ -2923,8 +2957,7 @@ sub GetOneChangeset {
                                                  . "      WHERE parentdata = 0 ORDER BY schedule_id LIMIT 1) AS A "
                                                  . "CROSS JOIN (SELECT schedule_id, actiontype, label FROM PhysicalActionSchedule "
                                                  . "            WHERE parentdata = 0) AS B "
-                                                 . "WHERE (A.actiontype = '@{[ACTION_LABEL]}' "
-                                                 . "    OR B.actiontype = '@{[ACTION_LABEL]}') "
+                                                 . "WHERE A.actiontype = '@{[ACTION_LABEL]}' "
                                                  . "AND (A.label IS NULL AND B.label IS NOT NULL "
                                                  . "     OR A.label IS NOT NULL AND B.label IS NULL "
                                                  . "     OR A.label IS NOT NULL AND B.label IS NOT NULL AND A.label != B.label)");
