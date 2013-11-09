@@ -44,6 +44,7 @@ use constant {
     TASK_MERGEPARENTDATA => 'MERGEPARENTDATA',
     TASK_MERGEMOVEDATA => 'MERGEMOVEDATA',
     TASK_REMOVETMPCHECKIN => 'REMOVETMPCHECKIN',
+    TASK_TESTGITAUTHORINFO => 'TESTGITAUTHORINFO',
     TASK_MERGEUNPINPIN => 'MERGEUNPINPIN',
     TASK_BUILDCOMMENTS => 'BUILDCOMMENTS',
     TASK_BUILDACTIONHIST => 'BUILDACTIONHIST',
@@ -140,6 +141,11 @@ my @joblist =
      {
          task => TASK_REMOVETMPCHECKIN,
          handler => \&RemoveTemporaryCheckIns,
+     },
+     # Test git author data
+     {
+         task => TASK_TESTGITAUTHORINFO,
+         handler => \&TestGitAuthorInfo,
      },
      # Initialize the git repo and a few in memory structures
      {
@@ -652,6 +658,33 @@ sub LoadNameLookup {
         $gNameLookup{ $row->{offset} } = Encode::decode_utf8( $row->{name} );
     }
 }  #  End LoadNameLookup
+
+###############################################################################
+#  TestGitAuthorInfo
+###############################################################################
+sub TestGitAuthorInfo {
+    # Now that we have the physical history, test our author data
+    my($sth, $tth, $rows);
+    my @amk = keys %{$author_map}; # grab all the usernames
+    my $in_clause = join q{,}, ('?') x (scalar @amk);
+    my $err = 0;
+
+    $sth = $gCfg{dbh}->prepare("SELECT DISTINCT author "
+                               ."FROM PhysicalAction "
+                               . "WHERE author NOT IN ($in_clause) "
+                               . "ORDER BY author");
+    $sth->execute(@amk);
+    $rows = $sth->fetchall_arrayref( {} );
+
+    foreach my $row (@$rows) {
+        ++$err;
+        print "Found unknown username `$row->{author}'.\n";
+    }
+
+    die "author file '$gCfg{author_info}' is incomplete." if $err;
+
+    1;
+}
 
 ###############################################################################
 #  GitReadImage
@@ -2295,12 +2328,33 @@ sub Initialize {
         die "author_info file '$gCfg{author_info}' is not readable";
     } else {
         open my $info, $gCfg{author_info} or die "Could not open $gCfg{author_info}: $!";
+        my $err = 0;
 
-        while(<$info>) {
+        while (<$info>) {
             my ($username, $author, $author_email) = split(/\t/);
+            if (defined $username) {
+                if (!defined $author) {
+                    ++$err;
+                    print "Undefined author for username `$username'\n";
+                } elsif (defined $author && $author eq '') {
+                    ++$err;
+                    print "Empty author for username `$username'\n";
+                }
+
+                if (!defined $author_email) {
+                    ++$err;
+                    print "Undefined author email for username `$username'\n";
+                } elsif (defined $author_email && $author_email eq '') {
+                    ++$err;
+                    print "Empty author email for username `$username'\n";
+                }
+            }
+
             $author_map->{$username} = { name => $author, email => $author_email };
         }
         close $info;
+
+        die "author file '$gCfg{author_info}' had errors." if $err;
     }
 
     $gCfg{sqlitedb} = File::Spec->catfile($gCfg{tempdir}, 'vss_data.db');
