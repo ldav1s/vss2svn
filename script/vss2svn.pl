@@ -368,7 +368,7 @@ sub GetVssItemVersions {
 
     my($parentdata, $version, $vernum, $action, $name, $actionid, $actiontype,
        $tphysname, $itemname, $itemtype, $parent, $user, $timestamp, $comment,
-       $is_binary, $info, $priority, $sortkey, $label, $cachename);
+       $is_binary, $info, $priority, $label, $cachename);
 
     my $last_timestamp = 0;
     # RollBack is only seen in combiation with a BranchFile activity, so actually
@@ -556,13 +556,10 @@ VERSION:
             when (ACTION_BRANCH) { $priority -= 2; }
         }
 
-        # store the reversed physname as a sortkey; a bit wasteful but makes
-        # debugging easier for the time being...
-        $sortkey = reverse($tphysname);
 
         $cache->add($tphysname, $vernum, $parentphys, $actiontype, $itemname,
                     $itemtype, $timestamp, $user, $is_binary, $info, $priority,
-                    $sortkey, $parentdata, $label, $comment);
+                    $parentdata, $label, $comment);
 
         # Handle version labels as a secondary action for the same version
         # version labels and label action use the same location to store the
@@ -581,7 +578,7 @@ VERSION:
             }
             $cache->add($tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
                         $itemtype, $timestamp, $user, $is_binary, $info, 5,
-                        $sortkey, $parentdata, $version->{Label}, $labelComment);
+                        $parentdata, $version->{Label}, $labelComment);
         }
     }
 
@@ -1321,7 +1318,6 @@ EOSQL
         is_binary   INTEGER,
         info        VARCHAR,
         priority    INTEGER,
-        sortkey     VARCHAR,
         parentdata  INTEGER,
         label       VARCHAR,
         comment     TEXT
@@ -1392,8 +1388,7 @@ EOSQL
 CREATE INDEX
     PhysicalAction_IDX1 ON PhysicalAction (
         timestamp   ASC,
-        priority    ASC,
-        sortkey     ASC
+        priority    ASC
     )
 EOSQL
 
@@ -1412,78 +1407,8 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
-    $sql = <<"EOSQL";
-CREATE TABLE
-    VssAction (
-        action_id   INTEGER PRIMARY KEY,
-        parentphys  VARCHAR,
-        physname    VARCHAR,
-        version     INTEGER,
-        action      VARCHAR,
-        itempaths   VARCHAR,
-        itemtype    INTEGER,
-        is_binary   INTEGER,
-        info        VARCHAR
-    )
-EOSQL
 
-    $gCfg{dbh}->do($sql);
-
-    $sql = <<"EOSQL";
-CREATE INDEX
-    VssAction_IDX1 ON VssAction (
-        action_id   ASC
-    )
-EOSQL
-
-    $gCfg{dbh}->do($sql);
-
-    $sql = <<"EOSQL";
-CREATE TABLE
-    SvnRevision (
-        revision_id INTEGER PRIMARY KEY,
-        timestamp   INTEGER,
-        author      VARCHAR,
-        comment     TEXT
-    )
-EOSQL
-
-    $gCfg{dbh}->do($sql);
-
-    $sql = <<"EOSQL";
-CREATE TABLE
-    SvnRevisionVssAction (
-        revision_id INTEGER,
-        action_id   INTEGER
-    )
-EOSQL
-
-    $gCfg{dbh}->do($sql);
-
-    $sql = <<"EOSQL";
-CREATE INDEX
-    SvnRevisionVssAction_IDX1 ON SvnRevisionVssAction (
-        revision_id ASC,
-        action_id   ASC
-    )
-EOSQL
-
-    $gCfg{dbh}->do($sql);
-
-    $sql = <<"EOSQL";
-CREATE TABLE
-    Label (
-        physical VARCHAR,
-        version  INTEGER,
-        label    VARCHAR,
-        imtempaths  VARCHAR
-    )
-EOSQL
-
-    $gCfg{dbh}->do($sql);
-
-    my @cfgitems = qw(task step vssdir svnurl svnuser svnpwd ssphys tempdir
-        setsvndate starttime);
+    my @cfgitems = qw(task step ssphys tempdir starttime);
 
     my $fielddef = join(",\n        ",
                         map {sprintf('%-12.12s VARCHAR', $_)} @cfgitems);
