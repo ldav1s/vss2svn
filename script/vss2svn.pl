@@ -1683,7 +1683,6 @@ sub Initialize {
     &WriteDestroyedPlaceholderFiles();
 
     $gCfg{ssphys} ||= 'ssphys';
-    $gCfg{svn} ||= 'SVN.exe';
 
     $gCfg{task} = TASK_INIT;
     $gCfg{step} = 0;
