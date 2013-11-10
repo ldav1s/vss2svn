@@ -1032,7 +1032,7 @@ EOTXT
         $elapsed = sprintf("%2.2i:%2.2i:%2.2i", $hours, $mins, $secs);
     }
 
-    my($actions, $revisions, $mintime, $maxtime) = &GetStats();
+    my($actions, $discarded, $revisions, $mintime, $maxtime) = &GetStats();
 
     print <<"EOTXT";
 Started at              : $starttime
@@ -1040,6 +1040,7 @@ Ended at                : $endtime
 Elapsed time            : $elapsed (H:M:S)
 
 VSS Actions read        : $actions
+VSS Actions discarded   : $discarded
 git commits converted   : $revisions
 Date range (YYYY-MM-DD) : $mintime to $maxtime
 
@@ -1051,25 +1052,10 @@ EOTXT
 #  GetStats
 ###############################################################################
 sub GetStats {
-    my($sql, $actions, $revisions, $mintime, $maxtime);
+    my($actions, $discarded, $mintime, $maxtime);
 
-    $sql = <<"EOSQL";
-SELECT
-    COUNT(*)
-FROM
-    VssAction
-EOSQL
-
-    ($actions) = $gCfg{dbh}->selectrow_array($sql);
-
-    $sql = <<"EOSQL";
-SELECT
-    COUNT(*)
-FROM
-    SvnRevision
-EOSQL
-
-    ($revisions) = $gCfg{dbh}->selectrow_array($sql);
+    ($actions) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalActionRetired');
+    ($discarded) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalActionDiscarded');
 
     $mintime = $gCfg{mintime};
     $maxtime = $gCfg{maxtime};
@@ -1078,8 +1064,7 @@ EOSQL
         $_ = POSIX::strftime(MINMAX_TIME_FMT, localtime($_));
     }
 
-    # initial creation of the repo wasn't considered an action or revision
-    return($actions - 1, $revisions - 1, $mintime, $maxtime);
+    return($actions, $discarded, $gCfg{commit}-1, $mintime, $maxtime);
 
 }  #  End GetStats
 
