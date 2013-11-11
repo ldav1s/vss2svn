@@ -234,33 +234,40 @@ sub LoadVssNames {
 
     my $namesref = $xml->{NameCacheEntry} || return 1;
 
-    my($entry, $count, $offset, $name);
+    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
 
-    my $cache = Vss2Svn::DataCache->new('NameLookup')
-        || &ThrowError("Could not create cache 'NameLookup'");
-
+    eval {
+        my($entry, $count, $offset, $name);
+        my $sth = $gCfg{dbh}->prepare('INSERT INTO NameLookup (offset, name) VALUES (?, ?)');
 ENTRY:
-    foreach $entry (@$namesref) {
-        $count = $entry->{NrOfEntries};
-        $offset = $entry->{offset};
+        foreach $entry (@$namesref) {
+            $count = $entry->{NrOfEntries};
+            $offset = $entry->{offset};
 
-        # The cache can contain 4 different entries:
-        #   id=1: abbreviated DOS 8.3 name for file items
-        #   id=2: full name for file items
-        #   id=3: abbreviated 27.3 name for file items
-        #   id=10: full name for project items
-        # Both ids 1 and 3 are not of any interest for us, since they only
-        # provide abbreviated names for different szenarios. We are only
-        # interested if we have id=2 for file items, or id=10 for project
-        # items.
-        foreach $name (@{$entry->{Entry}}) {
-            if ($name->{id} == 10 || $name->{id} == 2) {
-                $cache->add($offset, $name->{content});
+            # The cache can contain 4 different entries:
+            #   id=1: abbreviated DOS 8.3 name for file items
+            #   id=2: full name for file items
+            #   id=3: abbreviated 27.3 name for file items
+            #   id=10: full name for project items
+            # Both ids 1 and 3 are not of any interest for us, since they only
+            # provide abbreviated names for different szenarios. We are only
+            # interested if we have id=2 for file items, or id=10 for project
+            # items.
+            foreach $name (@{$entry->{Entry}}) {
+                if ($name->{id} == 10 || $name->{id} == 2) {
+                    $sth->execute($offset, $name->{content});
+                }
             }
         }
-    }
+    };
 
-    $cache->commit();
+    if ($@) {
+        warn "Transaction aborted because $@";
+        eval { $gCfg{dbh}->rollback };
+        die "Failed to load name lookup table";
+    } else {
+        $gCfg{dbh}->commit;
+    }
 
     1;
 }  #  End LoadVssNames
@@ -270,14 +277,17 @@ ENTRY:
 ###############################################################################
 sub FindPhysDbFiles {
 
-    my $cache = Vss2Svn::DataCache->new('Physical')
-        || &ThrowError("Could not create cache 'Physical'");
-    my $vssdb_cnt = 0;
-    my @dirs = ($gCfg{vssdatadir});
-    my $start_depth = $gCfg{vssdatadir} =~ tr[/][];
-    my $vssfile_depth = $start_depth + 1;
+    my $sth = $gCfg{dbh}->prepare('INSERT INTO Physical (physname, datapath) VALUES (?, ?)');
 
-    find({
+    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+
+    eval {
+        my $vssdb_cnt = 0;
+        my @dirs = ($gCfg{vssdatadir});
+        my $start_depth = $gCfg{vssdatadir} =~ tr[/][];
+        my $vssfile_depth = $start_depth + 1;
+
+        find({
             preprocess => sub {
                 my $depth = $File::Find::dir =~ tr[/][];
                 return sort grep { -d $_ && $_ =~ m:^[a-z]{1}$:i } @_ if $depth < $vssfile_depth;
@@ -286,14 +296,21 @@ sub FindPhysDbFiles {
             wanted => sub {
                 my $depth = $File::Find::dir =~ tr[/][];
                 return if $depth != $vssfile_depth;
-                $cache->add(uc($_), $File::Find::name);
+                $sth->execute(uc($_), $File::Find::name);
                 ++$vssdb_cnt;
             },
-         }, @dirs);
+             }, @dirs);
 
-    print "Found $vssdb_cnt VSS database files at '$gCfg{vssdatadir}'\n" if $gCfg{verbose};
+        print "Found $vssdb_cnt VSS database files at '$gCfg{vssdatadir}'\n" if $gCfg{verbose};
+    };
 
-    $cache->commit();
+    if ($@) {
+        warn "Transaction aborted because $@";
+        eval { $gCfg{dbh}->rollback };
+        die "Failed to load physical table";
+    } else {
+        $gCfg{dbh}->commit;
+    }
 
     1;
 }  #  End FindPhysDbFiles
