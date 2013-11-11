@@ -10,7 +10,7 @@ Module::Build->new
 	  'Getopt::Long' => '>= 2.34',
 	  'DBI' => '>= 1.47',
 	  'DBD::SQLite2' => '>= 0.33',
-	  'XML::Simple' => '>= 2.14',
+	  'XML::LibXML' => '>= 2.0019',
 	  'Data::UUID' => 0,
 	  'File::Find' => 0,
 	  'File::Path' => 0,

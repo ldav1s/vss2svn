@@ -13,7 +13,7 @@ use Getopt::Long;
 use Data::UUID;
 use DBI;
 use DBD::SQLite2;
-use XML::Simple;
+use XML::LibXML;
 use File::Basename;
 use File::Copy;
 use File::Find;
@@ -227,36 +227,32 @@ sub LoadVssNames {
                File::Spec->catdir($gCfg{vssdatadir}, 'names.dat'));
     &DoSsCmd(@cmd);
 
-    my $xs = XML::Simple->new(KeyAttr => [],
-                              ForceArray => [qw(NameCacheEntry Entry)],);
-
-    my $xml = $xs->XMLin($gSysOut);
-
-    my $namesref = $xml->{NameCacheEntry} || return 1;
-
     $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
 
     eval {
-        my($entry, $count, $offset, $name);
         my $sth = $gCfg{dbh}->prepare('INSERT INTO NameLookup (offset, name) VALUES (?, ?)');
-ENTRY:
-        foreach $entry (@$namesref) {
-            $count = $entry->{NrOfEntries};
-            $offset = $entry->{offset};
 
-            # The cache can contain 4 different entries:
-            #   id=1: abbreviated DOS 8.3 name for file items
-            #   id=2: full name for file items
-            #   id=3: abbreviated 27.3 name for file items
-            #   id=10: full name for project items
-            # Both ids 1 and 3 are not of any interest for us, since they only
-            # provide abbreviated names for different szenarios. We are only
-            # interested if we have id=2 for file items, or id=10 for project
-            # items.
-            foreach $name (@{$entry->{Entry}}) {
-                if ($name->{id} == 10 || $name->{id} == 2) {
-                    $sth->execute($offset, $name->{content});
-                }
+        my $xmldoc = XML::LibXML->load_xml(string => $gSysOut);
+
+        # The cache can contain 4 different entries:
+        #   id=1: abbreviated DOS 8.3 name for file items
+        #   id=2: full name for file items
+        #   id=3: abbreviated 27.3 name for file items
+        #   id=10: full name for project items
+        # Both ids 1 and 3 are not of any interest for us, since they only
+        # provide abbreviated names for different scenarios. We are only
+        # interested if we have id=2 for file items, or id=10 for project
+        # items.
+        my $interest = 'Entry[@id = 2 or @id = 10]'; # XPath query for Entries of interest
+        my @namecacheentries = $xmldoc->findnodes("File/NameCacheEntry[$interest]"); # XPath for grabbing the enclosing NameCacheEntry
+
+        # all the NameCacheEntries should be valid, now filter Entries
+        foreach my $namecachentry (@namecacheentries) {
+            my $offset = $namecachentry->getAttribute('offset');
+            my @entries = $namecachentry->findnodes($interest);
+            foreach my $entry (@entries) {
+                my $name = $entry->textContent();
+                $sth->execute($offset, $name);
             }
         }
     };
@@ -319,23 +315,20 @@ sub FindPhysDbFiles {
 #  GetPhysVssHistory
 ###############################################################################
 sub GetPhysVssHistory {
-    my($sql, $sth, $row, $physname, $datapath);
+    my($sth, $row, $physname, $datapath);
 
     &LoadNameLookup;
     my $cache = Vss2Svn::DataCache->new('PhysicalAction', 1)
         || &ThrowError("Could not create cache 'PhysicalAction'");
 
-    $sql = "SELECT * FROM Physical";
-    $sth = $gCfg{dbh}->prepare($sql);
+    $sth = $gCfg{dbh}->prepare('SELECT * FROM Physical ORDER BY physname');
     $sth->execute();
-
-    my $xs = XML::Simple->new(ForceArray => [qw(Version)]);
 
     while (defined($row = $sth->fetchrow_hashref() )) {
         $physname = $row->{physname};
         $datapath = $row->{datapath};
 
-        &GetVssPhysInfo($cache, $datapath, $physname, $xs);
+        &GetVssPhysInfo($cache, $datapath, $physname);
     }
 
     $cache->commit();
@@ -347,28 +340,28 @@ sub GetPhysVssHistory {
 #  GetVssPhysInfo
 ###############################################################################
 sub GetVssPhysInfo {
-    my($cache, $datapath, $physname, $xs) = @_;
+    my($cache, $datapath, $physname) = @_;
 
     print "datapath: \"$datapath\"\n" if $gCfg{debug};
     my @cmd = ('info', "-e$gCfg{encoding}", "$datapath");
     &DoSsCmd(@cmd);
 
-    my $xml = $xs->XMLin($gSysOut);
+
+    my $xmldoc = XML::LibXML->load_xml(string => $gSysOut);
+
     my $parentphys;
 
-    my $iteminfo = $xml->{ItemInfo};
+    my $type = $xmldoc->findvalue('File/ItemInfo/Type');
+    my $binary = $xmldoc->findvalue('File/ItemInfo/Binary');
 
-    if (!defined($iteminfo) || !defined($iteminfo->{Type}) ||
-        ref($iteminfo->{Type})) {
-
+    if (!defined $type) {
         &ThrowWarning("Can't handle file '$physname'; not a project or file\n");
         return;
     }
 
-    for ($iteminfo->{Type}) {
+    for ($type+0) {
         when (VSS_PROJECT) {
-            $parentphys = (uc($physname) eq VSSDB_ROOT)?
-                '' : &GetProjectParent($xml);
+            $parentphys = $xmldoc->findvalue('File/ItemInfo/ParentPhys');
         }
         when (VSS_FILE) { $parentphys = undef; }
         default {
@@ -377,30 +370,21 @@ sub GetVssPhysInfo {
         }
     }
 
-    &GetVssItemVersions($cache, $physname, $parentphys, $xml);
+    my @versions = $xmldoc->findnodes('File/Version');
+
+    if (scalar @versions > 0) {
+        &GetVssItemVersions($cache, $physname, $parentphys, \@versions, $type, $binary);
+    }
 
 }  #  End GetVssPhysInfo
-
-###############################################################################
-#  GetProjectParent
-###############################################################################
-sub GetProjectParent {
-    my($xml) = @_;
-
-    no warnings 'uninitialized';
-    return $xml->{ItemInfo}->{ParentPhys} || undef;
-
-}  #  End GetProjectParent
 
 ###############################################################################
 #  GetVssItemVersions
 ###############################################################################
 sub GetVssItemVersions {
-    my($cache, $physname, $parentphys, $xml) = @_;
+    my($cache, $physname, $parentphys, $versions, $ii_type, $ii_binary) = @_;
 
-    return 0 unless defined $xml->{Version};
-
-    my($parentdata, $version, $vernum, $action, $name, $actionid, $actiontype,
+    my($parentdata, $version, $vernum, $actionid, $actiontype,
        $tphysname, $itemname, $itemtype, $parent, $user, $timestamp, $comment,
        $is_binary, $info, $priority, $label, $cachename);
 
@@ -445,15 +429,15 @@ sub GetVssItemVersions {
         );
 
 VERSION:
-    foreach $version (@{ $xml->{Version} }) {
-        $action = $version->{Action};
-        $name = $action->{SSName};
-        $tphysname = $action->{Physical} || $physname;
-        $user = $version->{UserName};
+    foreach $version (@$versions) {
+        $tphysname = $version->exists('Action/Physical')
+            ? $version->findvalue('Action/Physical')
+            : $physname;
+        $user = $version->findvalue('UserName');
+        $vernum = $version->findvalue('VersionNumber');
+        $timestamp = $version->findvalue('Date');
 
-        $itemname = &GetItemName($name);
-
-        $actionid = $action->{ActionId};
+        $actionid = $version->findvalue('Action/@ActionId');
         $info = $gActionType{$actionid};
 
         if (!$info) {
@@ -465,11 +449,10 @@ VERSION:
         # example checking the next version and calculate the middle time stamp
         # but regardless of what we do here, the result is erroneous, since it
         # will mess up the labeling.
-        $timestamp = $version->{Date};
         if ($timestamp < $last_timestamp) {
             $timestamp = $last_timestamp + 1;
             &ThrowWarning ("'$physname': wrong timestamp at version "
-                           . "'$version->{VersionNumber}'; setting timestamp to "
+                           . "'$vernum'; setting timestamp to "
                            . "'$timestamp'");
         }
         $last_timestamp = $timestamp;
@@ -481,6 +464,19 @@ VERSION:
             next VERSION;
         }
 
+        if ($itemtype == VSS_PROJECT
+            && uc($physname) eq VSSDB_ROOT) {
+            $itemname = &GetItemName($version->findvalue('Action/SSName'),
+                                     $version->findvalue('Action/SSName/@offset'));
+            if ($itemname eq '$/') {
+                $itemname = '';
+            }
+            $tphysname = $version->findvalue('Action/Physical');
+        } else {
+            $itemname = &GetItemName($version->findvalue('Action/SSName'),
+                                     $version->findvalue('Action/SSName/@offset'));
+        }
+
         $comment = undef;
         $is_binary = 0;
         $info = undef;
@@ -488,30 +484,27 @@ VERSION:
         $priority = 5;
         $label = undef;
 
-        if ($version->{Comment} && !ref($version->{Comment})) {
-            $comment = $version->{Comment} || undef;
+        if ($version->exists('Comment')) {
+            $comment = $version->findvalue('Comment') || undef;
         }
 
         # In case of Label the itemtype is the type of the item currently
         # under investigation
         if ($actiontype eq ACTION_LABEL) {
-            my $iteminfo = $xml->{ItemInfo};
-            $itemtype = $iteminfo->{Type};
+            $itemtype = $ii_type;
         }
-
         # we can have label actions and labels attached to versions
-        if (defined $action->{Label} && !ref($action->{Label})) {
-            $label = $action->{Label};
-
+        if ($version->exists('Action/Label')) {
+            $label = $version->findvalue('Action/Label');
+            my $lcom = $version->findvalue('Action/LabelComment');
             # append the label comment to a possible version comment
-            if ($action->{LabelComment} && !ref($action->{LabelComment})) {
+            if (defined $lcom && $lcom ne '') {
                 if (defined $comment) {
                     print "Merging LabelComment and Comment for "
-                        . "'$tphysname;$version->{VersionNumber}'\n"; # if $gCfg{verbose};
+                        . "'$tphysname;$vernum'\n"; # if $gCfg{verbose};
                     $comment .= "\n";
                 }
-
-                $comment .= $action->{LabelComment} || undef;
+                $comment .= $lcom || undef;
             }
         }
 
@@ -521,12 +514,11 @@ VERSION:
             $comment =~ s/\s+$//s;
         }
 
-        if ($itemtype == VSS_PROJECT && uc($physname) eq VSSDB_ROOT
-            && ref($tphysname)) {
+        print "** physname `$physname'\n";
+        print "** tphysname `$tphysname'\n";
+        print "** parentphys `$parentphys'\n" if defined $parentphys;
 
-            $tphysname = $physname;
-            $itemname = '';
-        } elsif ($physname ne $tphysname) {
+        if ($physname ne $tphysname) {
             # If version's physical name and file's physical name are different,
             # this is a project describing an action on a child item. Most of
             # the time, this very same data will be in the child's physical
@@ -549,39 +541,38 @@ VERSION:
             $parentphys = $physname;
         }
 
-        if ($itemtype == VSS_FILE && defined($xml->{ItemInfo})
-            && defined($xml->{ItemInfo}->{Binary})) {
-            $is_binary = $xml->{ItemInfo}->{Binary};
+        if ($itemtype == VSS_FILE) {
+            $is_binary = $ii_binary;
         }
 
         for ($actiontype) {
             when (ACTION_RENAME) {
                 # if a rename, we store the new name in the action's 'info' field
-                $info = &GetItemName($action->{NewSSName});
+                $info = &GetItemName($version->findvalue('Action/NewSSName'),
+                                     $version->findvalue('Action/NewSSName/@offset'));
             }
             when (ACTION_BRANCH) {
-                $info = $action->{Parent};
+                $info = $version->findvalue('Action/Parent');
             }
             when (ACTION_MOVE_TO) {
-                $info = $action->{DestPath};
+                $info = $version->findvalue('Action/DestPath');
                 $info =~ s/^..(.*)$/$1/;
             }
             when (ACTION_MOVE_FROM) {
-                $info = $action->{SrcPath};
+                $info = $version->findvalue('Action/SrcPath');
                 $info =~ s/^..(.*)$/$1/;
             }
         }
 
 
-        $vernum = $version->{VersionNumber};
 
         # since there is no corresponding client action for PIN, we need to
         # enter the concrete version number here manually
         # In a share action the pinnedToVersion attribute can also be set
-        $vernum = $action->{PinnedToVersion} if (defined $action->{PinnedToVersion});
+        $vernum = $version->findvalue('Action/PinnedToVersion') if ($version->exists('Action/PinnedToVersion'));
 
         # for unpin actions also remeber the unpinned version
-        $info = $action->{UnpinnedFromVersion} if (defined $action->{UnpinnedFromVersion});
+        $info = $version->findvalue('Action/UnpinnedFromVersion') if ($version->exists('Action/UnpinnedFromVersion'));
 
         for ($actiontype) {
             when (ACTION_ADD) { $priority -= 4; }
@@ -600,19 +591,20 @@ VERSION:
         # label. Therefore it is not possible to assign a version label to
         # version where the actiontype was LABEL. But ssphys will report the
         # same label twice. Therefore filter the Labeling versions here.
-        if (defined $version->{Label} && !ref($version->{Label})
+        if ($version->exists('Label')
             && $actiontype ne ACTION_LABEL) {
             my ($labelComment);
+            my $vlabel = $version->findvalue('Label');
 
-            if ($version->{LabelComment} && !ref($version->{LabelComment})) {
-                $labelComment = $version->{LabelComment};
+            if ($version->exists('LabelComment')) {
+                $labelComment = $version->findvalue('LabelComment');
             }
             else {
-                $labelComment = "assigned label '$version->{Label}' to version $vernum of physical file '$tphysname'";
+                $labelComment = "assigned label '$vlabel' to version $vernum of physical file '$tphysname'";
             }
             $cache->add($tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
                         $itemtype, $timestamp, $user, $is_binary, $info, 5,
-                        $parentdata, $version->{Label}, $labelComment);
+                        $parentdata, $vlabel, $labelComment);
         }
     }
 
@@ -622,13 +614,11 @@ VERSION:
 #  GetItemName
 ###############################################################################
 sub GetItemName {
-    my($nameelem) = @_;
+    my($itemname, $offset) = @_;
 
-    my $itemname = $nameelem->{content};
-
-    if (defined($nameelem->{offset})) {
+    if (defined $offset) {
         # see if we have a better name in the cache
-        my $cachename = $gNameLookup{ $nameelem->{offset} };
+        my $cachename = $gNameLookup{ $offset };
 
         if (defined($cachename)) {
             print "Changing name of '$itemname' to '$cachename' from "
@@ -1593,8 +1583,6 @@ sub Initialize {
         $gCfg{usingExe} = (defined($PerlApp::TOOL));
     }
 
-    &ConfigureXmlParser();
-
     # Files for various puposes.  The 'keep' file is to
     # force git to keep directory files with no other files
     # in them around.
@@ -1623,71 +1611,6 @@ sub Initialize {
     $gCfg{task} = TASK_INIT;
     $gCfg{step} = 0;
 }  #  End Initialize
-
-###############################################################################
-#  ConfigureXmlParser
-###############################################################################
-sub ConfigureXmlParser {
-
-    if(defined($ENV{XML_SIMPLE_PREFERRED_PARSER})) {
-        # user has defined a preferred parser; don't mess with it
-        $gCfg{xmlParser} = $ENV{XML_SIMPLE_PREFERRED_PARSER};
-        return 1;
-    }
-
-    $gCfg{xmlParser} = 'XML::Simple';
-
-    eval { require XML::SAX; };
-
-    if($@) {
-        # no XML::SAX; let XML::Simple use its own parser
-        return 1;
-    }
-    elsif($gCfg{usingExe}) {
-        # Prevent the ParserDetails.ini error message when running from .exe
-        XML::SAX->load_parsers($INC[1]);
-    }
-
-    $gCfg{xmlParser} = 'XML::SAX::Expat';
-    $XML::SAX::ParserPackage = $gCfg{xmlParser};
-
-    my $p;
-
-    eval { $p = XML::SAX::ParserFactory->parser(); };
-
-    if(!$@) {
-        # XML::SAX::Expat installed; use it
-
-        # for exe version, XML::Parser::Expat needs help finding its encmaps
-        no warnings 'once';
-
-        my $encdir;
-        foreach my $dir (@INC) {
-            $encdir = "$dir/encodings";
-            $encdir =~ s:\\:/:g;
-            $encdir =~ s://:/:g;
-            if(-d $encdir) {
-                print "Adding '$encdir' to encodings file path\n";
-                push(@XML::Parser::Expat::Encoding_Path, $encdir);
-            }
-        }
-
-        return 1;
-    }
-
-    undef $XML::SAX::ParserPackage;
-    eval { $p = XML::SAX::ParserFactory->parser(); };
-
-    if(!$@) {
-        $gCfg{xmlParser} = ref $p;
-        return 1;
-    }
-
-    # couldn't find a better package; go back to XML::Simple
-    $gCfg{'xmlParser'} = 'XML::Simple';
-    return 1;
-
-}  #  End ConfigureXmlParser
 
 ###############################################################################
 #  GiveHelp
