@@ -153,6 +153,23 @@ my @joblist =
      }
     );
 
+# Data for PhyicalAction table
+my @physical_action_params = (
+{        'physname' =>    'VARCHAR' },
+{        'version' =>     'INTEGER'},
+{        'parentphys' =>  'VARCHAR'},
+{        'actiontype' =>  'VARCHAR'},
+{        'itemname' =>    'VARCHAR'},
+{        'itemtype' =>    'INTEGER'},
+{        'timestamp' =>   'INTEGER'},
+{        'author' =>      'VARCHAR'},
+{        'is_binary' =>   'INTEGER'},
+{        'info' =>        'VARCHAR'},
+{        'priority' =>    'INTEGER'},
+{        'parentdata' =>  'INTEGER'},
+{        'label' =>       'VARCHAR'},
+{        'comment' =>     'TEXT'},
+    );
 
 &Initialize;
 &ConnectDatabase;
@@ -1306,22 +1323,14 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
-    my $pa_sql = <<"EOSQL";
-        physname    VARCHAR,
-        version     INTEGER,
-        parentphys  VARCHAR,
-        actiontype  VARCHAR,
-        itemname    VARCHAR,
-        itemtype    INTEGER,
-        timestamp   INTEGER,
-        author      VARCHAR,
-        is_binary   INTEGER,
-        info        VARCHAR,
-        priority    INTEGER,
-        parentdata  INTEGER,
-        label       VARCHAR,
-        comment     TEXT
-EOSQL
+    my @pa_ary;
+    foreach my $param (@physical_action_params) {
+        my($field, $type);
+        while (($field, $type) = each %$param) {
+            push @pa_ary, "$field $type";
+        }
+    }
+    my $pa_sql = join(', ', @pa_ary);
 
     $sql = <<"EOSQL";
 CREATE TABLE
