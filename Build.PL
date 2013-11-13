@@ -9,7 +9,7 @@ Module::Build->new
       requires => {
 	  'Getopt::Long' => '>= 2.34',
 	  'DBI' => '>= 1.47',
-	  'DBD::SQLite2' => '>= 0.33',
+	  'DBD::SQLite' => '>= 1.37',
 	  'XML::LibXML' => '>= 2.0019',
 	  'Data::UUID' => 0,
 	  'File::Find' => 0,
@@ -22,6 +22,5 @@ Module::Build->new
           'Data::Dumper' => 0,
       },
       script_files => { 'script/vss2svn.pl' => 'script/vss2svn.pl', 'ssphys/ssphys' => 'bin/ssphys'},
-      pm_files => { 'script/Vss2Svn/DataCache.pm' =>  'lib/Vss2Svn/DataCache.pm' },
       PL_files => { 'ssphys/ssphys.PL' => 'bin/ssphys' },
       )->create_build_script;

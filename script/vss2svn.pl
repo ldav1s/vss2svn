@@ -12,7 +12,7 @@ use Cwd 'abs_path';
 use Getopt::Long;
 use Data::UUID;
 use DBI;
-use DBD::SQLite2;
+use DBD::SQLite;
 use XML::LibXML;
 use File::Basename;
 use File::Copy;
@@ -26,7 +26,6 @@ use Fcntl ':mode';
 use Storable qw(dclone);
 
 use lib '.';
-use Vss2Svn::DataCache;
 use POSIX;
 use Git;
 use Data::Dumper;
@@ -59,6 +58,13 @@ use constant {
     VSSDB_ROOT => 'AAAAAAAA',
     ISO8601_FMT => '%Y-%m-%dT%H:%M:%S',
     MINMAX_TIME_FMT => '%Y-%m-%d',
+    PA_PRIORITY_MAX => 5,
+    # This is arbitrary, tried to keep it fairly small
+    PAIR_INSERT_VAL => 256,
+    # This is arbitrary, tried to keep it fairly small
+    PHYSICAL_FILES_LIMIT => 512,
+    # This is arbitrary, tried to keep it fairly small
+    PA_PARAMS_LIMIT => 16,
 };
 
 use constant {
@@ -230,8 +236,6 @@ sub LoadVssNames {
     $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
 
     eval {
-        my $sth = $gCfg{dbh}->prepare('INSERT INTO NameLookup (offset, name) VALUES (?, ?)');
-
         my $xmldoc = XML::LibXML->load_xml(string => $gSysOut);
 
         # The cache can contain 4 different entries:
@@ -245,6 +249,7 @@ sub LoadVssNames {
         # items.
         my $interest = 'Entry[@id = 2 or @id = 10]'; # XPath query for Entries of interest
         my @namecacheentries = $xmldoc->findnodes("File/NameCacheEntry[$interest]"); # XPath for grabbing the enclosing NameCacheEntry
+        my @val_list = ();
 
         # all the NameCacheEntries should be valid, now filter Entries
         foreach my $namecachentry (@namecacheentries) {
@@ -252,8 +257,18 @@ sub LoadVssNames {
             my @entries = $namecachentry->findnodes($interest);
             foreach my $entry (@entries) {
                 my $name = $entry->textContent();
-                $sth->execute($offset, $name);
+                push @val_list, $offset, $name;
             }
+
+            if (scalar @val_list >= PAIR_INSERT_VAL) {
+                &LoadUpVssNames(\@val_list);
+                @val_list = ();
+            }
+        }
+
+        if (scalar @val_list > 0) {
+            &LoadUpVssNames(\@val_list);
+            @val_list = ();
         }
     };
 
@@ -268,12 +283,18 @@ sub LoadVssNames {
     1;
 }  #  End LoadVssNames
 
+sub LoadUpVssNames {
+    my($val_list) = @_;
+
+    my $val_clause = join q{,}, ('(?, ?)') x ((scalar @{$val_list})/2);
+    my $sth = $gCfg{dbh}->prepare("INSERT INTO NameLookup (offset, name) VALUES $val_clause");
+    $sth->execute(@{$val_list});
+}
+
 ###############################################################################
 #  FindPhysDbFiles
 ###############################################################################
 sub FindPhysDbFiles {
-
-    my $sth = $gCfg{dbh}->prepare('INSERT INTO Physical (physname, datapath) VALUES (?, ?)');
 
     $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
 
@@ -282,6 +303,7 @@ sub FindPhysDbFiles {
         my @dirs = ($gCfg{vssdatadir});
         my $start_depth = $gCfg{vssdatadir} =~ tr[/][];
         my $vssfile_depth = $start_depth + 1;
+        my @phys_list = ();
 
         find({
             preprocess => sub {
@@ -292,11 +314,19 @@ sub FindPhysDbFiles {
             wanted => sub {
                 my $depth = $File::Find::dir =~ tr[/][];
                 return if $depth != $vssfile_depth;
-                $sth->execute(uc($_), $File::Find::name);
+                push @phys_list, uc($_), $File::Find::name;
                 ++$vssdb_cnt;
+                if (scalar @phys_list >= PAIR_INSERT_VAL) {
+                    &LoadUpPhysical(\@phys_list);
+                    @phys_list = ();
+                }
             },
              }, @dirs);
 
+        if (scalar @phys_list > 0) {
+            &LoadUpPhysical(\@phys_list);
+            @phys_list = ();
+        }
         print "Found $vssdb_cnt VSS database files at '$gCfg{vssdatadir}'\n" if $gCfg{verbose};
     };
 
@@ -311,27 +341,49 @@ sub FindPhysDbFiles {
     1;
 }  #  End FindPhysDbFiles
 
+sub LoadUpPhysical {
+    my($phys_list) = @_;
+
+    my $val_clause = join q{,}, ('(?, ?)') x ((scalar @{$phys_list})/2);
+    my $sth = $gCfg{dbh}->prepare("INSERT INTO Physical (physname, datapath) VALUES $val_clause");
+    $sth->execute(@{$phys_list});
+}
+
 ###############################################################################
 #  GetPhysVssHistory
 ###############################################################################
 sub GetPhysVssHistory {
-    my($sth, $row, $physname, $datapath);
 
     &LoadNameLookup;
-    my $cache = Vss2Svn::DataCache->new('PhysicalAction', 1)
-        || &ThrowError("Could not create cache 'PhysicalAction'");
+    my $physname = '';
+    my $limcount = 0;
 
-    $sth = $gCfg{dbh}->prepare('SELECT * FROM Physical ORDER BY physname');
-    $sth->execute();
+    # Break up inserts into multiple transactions
+    # Most files have one insert only (and most one set of VALUES only)!
+    my $sth = $gCfg{dbh}->prepare("SELECT * FROM Physical "
+                               . "WHERE physname > ? "
+                               . "ORDER BY physname LIMIT @{[PHYSICAL_FILES_LIMIT]}");
+    do {
+        $sth->execute($physname);
 
-    while (defined($row = $sth->fetchrow_hashref() )) {
-        $physname = $row->{physname};
-        $datapath = $row->{datapath};
-
-        &GetVssPhysInfo($cache, $datapath, $physname);
-    }
-
-    $cache->commit();
+        $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+        $limcount = 0;
+        eval {
+            my $row;
+            while (defined($row = $sth->fetchrow_hashref() )) {
+                $physname = $row->{physname};
+                &GetVssPhysInfo($row->{datapath}, $physname);
+                ++$limcount;
+            }
+        };
+        if ($@) {
+            warn "Transaction aborted because $@";
+            eval { $gCfg{dbh}->rollback };
+            die "Failed to load VSS items for `$physname'";
+        } else {
+            $gCfg{dbh}->commit;
+        }
+    } while ($limcount == PHYSICAL_FILES_LIMIT);
 
     1;
 }  #  End GetPhysVssHistory
@@ -340,7 +392,7 @@ sub GetPhysVssHistory {
 #  GetVssPhysInfo
 ###############################################################################
 sub GetVssPhysInfo {
-    my($cache, $datapath, $physname) = @_;
+    my($datapath, $physname) = @_;
 
     print "datapath: \"$datapath\"\n" if $gCfg{debug};
     my @cmd = ('info', "-e$gCfg{encoding}", "$datapath");
@@ -373,7 +425,7 @@ sub GetVssPhysInfo {
     my @versions = $xmldoc->findnodes('File/Version');
 
     if (scalar @versions > 0) {
-        &GetVssItemVersions($cache, $physname, $parentphys, \@versions, $type, $binary);
+        &GetVssItemVersions($physname, $parentphys, \@versions, $type, $binary);
     }
 
 }  #  End GetVssPhysInfo
@@ -382,12 +434,13 @@ sub GetVssPhysInfo {
 #  GetVssItemVersions
 ###############################################################################
 sub GetVssItemVersions {
-    my($cache, $physname, $parentphys, $versions, $ii_type, $ii_binary) = @_;
+    my($physname, $parentphys, $versions, $ii_type, $ii_binary) = @_;
 
     my($parentdata, $version, $vernum, $actionid, $actiontype,
        $tphysname, $itemname, $itemtype, $parent, $user, $timestamp, $comment,
        $is_binary, $info, $priority, $label, $cachename);
 
+    my @pa_list = ();
     my $last_timestamp = 0;
     # RollBack is only seen in combiation with a BranchFile activity, so actually
     # RollBack is the item view on the activity and BranchFile is the parent side
@@ -481,7 +534,7 @@ VERSION:
         $is_binary = 0;
         $info = undef;
         $parentdata = 0;
-        $priority = 5;
+        $priority = PA_PRIORITY_MAX;
         $label = undef;
 
         if ($version->exists('Comment')) {
@@ -513,10 +566,6 @@ VERSION:
             $comment =~ s/^\s+//s;
             $comment =~ s/\s+$//s;
         }
-
-        print "** physname `$physname'\n";
-        print "** tphysname `$tphysname'\n";
-        print "** parentphys `$parentphys'\n" if defined $parentphys;
 
         if ($physname ne $tphysname) {
             # If version's physical name and file's physical name are different,
@@ -582,9 +631,9 @@ VERSION:
         }
 
 
-        $cache->add($tphysname, $vernum, $parentphys, $actiontype, $itemname,
-                    $itemtype, $timestamp, $user, $is_binary, $info, $priority,
-                    $parentdata, $label, $comment);
+        push @pa_list, $tphysname, $vernum, $parentphys, $actiontype, $itemname,
+        $itemtype, $timestamp, $user, $is_binary, $info, $priority,
+        $parentdata, $label, $comment;
 
         # Handle version labels as a secondary action for the same version
         # version labels and label action use the same location to store the
@@ -602,13 +651,39 @@ VERSION:
             else {
                 $labelComment = "assigned label '$vlabel' to version $vernum of physical file '$tphysname'";
             }
-            $cache->add($tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
-                        $itemtype, $timestamp, $user, $is_binary, $info, 5,
-                        $parentdata, $vlabel, $labelComment);
+            push @pa_list, $tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
+            $itemtype, $timestamp, $user, $is_binary, $info, PA_PRIORITY_MAX,
+            $parentdata, $vlabel, $labelComment;
+        }
+
+        if (scalar @pa_list >= PA_PARAMS_LIMIT*(scalar @physical_action_params)) {
+            &LoadUpPhysActionInfo(\@pa_list);
+            @pa_list = ();
         }
     }
 
+    if (scalar @pa_list > 0) {
+        &LoadUpPhysActionInfo(\@pa_list);
+        @pa_list = ();
+    }
+
 }  #  End GetVssItemVersions
+
+sub LoadUpPhysActionInfo {
+    my($pa_list) = @_;
+
+    my @pa_ary;
+    foreach my $param (@physical_action_params) {
+        push @pa_ary, keys %$param;
+    }
+    my $pa_params_sql = join q{,}, @pa_ary;
+    my $val_params = join q{,}, ('?') x (scalar @pa_ary);
+    my $val_clause = join q{,}, ("(NULL, $val_params)") x ((scalar @{$pa_list})/(scalar @pa_ary));
+    my $sql = "INSERT INTO PhysicalAction (action_id, $pa_params_sql) VALUES $val_clause";
+
+    my $sth = $gCfg{dbh}->prepare($sql);
+    $sth->execute(@{$pa_list});
+}
 
 ###############################################################################
 #  GetItemName
@@ -1273,7 +1348,7 @@ sub ConnectDatabase {
 
     print "Connecting to database $db\n\n";
 
-    $gCfg{dbh} = DBI->connect("dbi:SQLite2:dbname=$db", '', '',
+    $gCfg{dbh} = DBI->connect("dbi:SQLite:dbname=$db", '', '',
                               {RaiseError => 1, AutoCommit => 1})
         or die "Couldn't connect database $db: $DBI::errstr";
 
@@ -1297,10 +1372,6 @@ sub SetupGlobals {
     }
 
     $gCfg{ssphys} = 'ssphys' if !defined($gCfg{ssphys});
-
-    Vss2Svn::DataCache->SetCacheDir($gCfg{tempdir});
-    Vss2Svn::DataCache->SetDbHandle($gCfg{dbh});
-    Vss2Svn::DataCache->SetVerbose($gCfg{verbose});
 
 }  #  End SetupGlobals
 
