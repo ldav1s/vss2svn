@@ -1474,8 +1474,7 @@ EOSQL
     $sql = <<"EOSQL";
 CREATE INDEX
     PhysicalAction_IDX1 ON PhysicalAction (
-        timestamp   ASC,
-        priority    ASC
+        timestamp   ASC
     )
 EOSQL
 
@@ -1484,16 +1483,12 @@ EOSQL
     $sql = <<"EOSQL";
 CREATE INDEX
     PhysicalAction_IDX2 ON PhysicalAction (
-        physname    ASC,
-        parentphys  ASC,
-        actiontype  ASC,
-        timestamp   ASC,
-        author      ASC
+        physname   ASC,
+        actiontype ASC
     )
 EOSQL
 
     $gCfg{dbh}->do($sql);
-
 
     my @cfgitems = qw(task step ssphys tempdir starttime);
 
