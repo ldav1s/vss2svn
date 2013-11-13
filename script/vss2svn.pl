@@ -1796,17 +1796,25 @@ EOSQL
 ###############################################################################
 sub SchedulePhysicalActions {
     my($timestamp) = @_;
-    my($sth, $rows);
-    my ($last_time);
     state $index = 0;
 
     # We must schedule, since timestamp is not fine enough resolution,
     # that some events happen before they should. So the timeline is
     # fixed here, if possible.
 
+    # PhysicalActionSchedule should be empty at this point
 
     my ($changeset_count) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalActionChangeset');
-
+    my $sth = $gCfg{dbh}->prepare('INSERT INTO PhysicalActionSchedule '
+                                  . 'SELECT NULL AS schedule_id, * '
+                                  . 'FROM PhysicalAction '
+                                  . 'WHERE timestamp >= ? '
+                                  . '  AND timestamp < ? '
+                                  . '  AND action_id NOT IN '
+                                  . '  (SELECT action_id FROM PhysicalActionSchedule '
+                                  . '   UNION ALL SELECT action_id FROM PhysicalActionRetired '
+                                  . '   UNION ALL SELECT action_id FROM PhysicalActionDiscarded) '
+                                  . 'ORDER BY timestamp ASC, priority ASC, parentdata DESC');
     if (defined $changeset_count && $changeset_count > 0) {
         # We have unused data from the last scheduling pass, let's use it.
         $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
@@ -1817,63 +1825,74 @@ sub SchedulePhysicalActions {
         ($timestamp) = $gCfg{dbh}->selectrow_array('SELECT timestamp '
                                                    . 'FROM PhysicalActionSchedule '
                                                    . 'WHERE schedule_id = (SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
-    } else {
-        # Grab a revisions' worth of PhysicalAction entries and stuff them into PhysicalActionSchedule
-        $sth = $gCfg{dbh}->prepare('INSERT INTO PhysicalActionSchedule '
-                                   . 'SELECT NULL, * FROM PhysicalAction WHERE timestamp >= ? '
-                                   . 'AND timestamp < ? '
-                                   . 'ORDER BY timestamp ASC, priority ASC, parentdata DESC');
+    }
 
-        $sth->execute($timestamp, $timestamp+$gCfg{revtimerange});
+    # This slides the window down.
+    my $should_schedule = $sth->execute($timestamp, $timestamp+$gCfg{revtimerange});
+
+    if (defined $should_schedule && $should_schedule > 0) {
         print "timestamp range: $timestamp - " . ($timestamp+$gCfg{revtimerange}) . "\n";
+        &ScheduleRevTime($timestamp);
+    }
 
-        $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
+    &GetOneChangeset($timestamp);
+}
 
-        my $startover_count = 0;
-        # We may end up here a few times as we schedule
-      STARTOVER:
-        # deep clone these so we can simulate
-        my $giti = dclone(\%git_image);
+###############################################################################
+#  ScheduleRevTime
+###############################################################################
+sub ScheduleRevTime {
+    my($timestamp) = @_;
+    my($sth, $rows);
+    state $index = 0;
 
-        # start scheduling
-        $sth->execute();
-        $rows = $sth->fetchall_arrayref( {} );
+    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
 
-        # This seems to be a kind of insertion sort, give it a bound
-        die "failed to schedule too many times" if $startover_count > ((scalar @$rows)*(scalar @$rows));
+    my $startover_count = 0;
+    # We may end up here a few times as we schedule
+  STARTOVER:
+    # deep clone these so we can simulate
+    my $giti = dclone(\%git_image);
 
-      ROW:
-        foreach my $row (@$rows) {
-            if ($index == 0
-                && $row->{physname} eq VSSDB_ROOT
-                && $row->{actiontype} eq ACTION_ADD
-                && $row->{itemname} eq "") {
-                # first time through, setting up the VSS root project
-                # we don't need this one
-                ++$index;
-                $gCfg{dbh}->do("INSERT INTO PhysicalActionDiscarded "
-                               . "SELECT NULL AS discarded_id, "
-                               . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * "
-                               . "FROM PhysicalActionSchedule WHERE schedule_id = $row->{schedule_id} "
-                               . "ORDER BY schedule_id");
-                $gCfg{dbh}->do("DELETE FROM PhysicalActionSchedule WHERE schedule_id = $row->{schedule_id}");
-                next ROW;
-            }
+    # start scheduling
+    $sth->execute();
+    $rows = $sth->fetchall_arrayref( {} );
 
-            my ($path, $parentpath);
+    # This seems to be a kind of insertion sort, give it a bound
+    die "failed to schedule too many times" if $startover_count > ((scalar @$rows)*(scalar @$rows));
 
-            if (defined $row->{parentphys}) {
-                my $rescheduled = 0;
-                if (!defined $giti->{$row->{parentphys}}) {
-                    # we are out of schedule
+  ROW:
+    foreach my $row (@$rows) {
+        if ($index == 0
+            && $row->{physname} eq VSSDB_ROOT
+            && $row->{actiontype} eq ACTION_ADD
+            && $row->{itemname} eq "") {
+            # first time through, setting up the VSS root project
+            # we don't need this one
+            ++$index;
+            $gCfg{dbh}->do("INSERT INTO PhysicalActionDiscarded "
+                           . "SELECT NULL AS discarded_id, "
+                           . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * "
+                           . "FROM PhysicalActionSchedule WHERE schedule_id = $row->{schedule_id} "
+                           . "ORDER BY schedule_id");
+            $gCfg{dbh}->do("DELETE FROM PhysicalActionSchedule WHERE schedule_id = $row->{schedule_id}");
+            next ROW;
+        }
+
+        my ($path, $parentpath);
+
+        if (defined $row->{parentphys}) {
+            my $rescheduled = 0;
+            if (!defined $giti->{$row->{parentphys}}) {
+                # we are out of schedule
 
 #                    print "out of order: parentphys " . $row->{parentphys} . " physname: " . $row->{physname} . "\n";
 #                    print "giti: " . Dumper($giti) . "\n";
 
-                    if ($row->{actiontype} eq ACTION_ADD || $row->{actiontype} eq ACTION_SHARE) {
-                        # we are added out of schedule
-                        my $tth;
-                        my $ooo;
+                if ($row->{actiontype} eq ACTION_ADD || $row->{actiontype} eq ACTION_SHARE) {
+                    # we are added out of schedule
+                    my $tth;
+                    my $ooo;
 
 #                    $tth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
 #                                               . 'WHERE timestamp = ? '
@@ -1882,93 +1901,93 @@ sub SchedulePhysicalActions {
 #                    $ooo = $tth->fetchall_arrayref();
 #                    print "slice entries before: " . Dumper($ooo) . "\n";
 
-                        # grab all the out of order entries
-                        $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
-                                                   . 'WHERE parentphys = ? AND timestamp = ? '
-                                                   . 'ORDER BY schedule_id');
-                        $tth->execute($row->{parentphys}, $row->{timestamp});
-                        $ooo = $tth->fetchall_arrayref();
-                        my @ooo_ids;
-                        my @action_ids;
+                    # grab all the out of order entries
+                    $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
+                                               . 'WHERE parentphys = ? AND timestamp = ? '
+                                               . 'ORDER BY schedule_id');
+                    $tth->execute($row->{parentphys}, $row->{timestamp});
+                    $ooo = $tth->fetchall_arrayref();
+                    my @ooo_ids;
+                    my @action_ids;
 
-                        foreach my $o (@$ooo) {
-                            push @ooo_ids, @{$o}[0];
-                            push @action_ids, @{$o}[1];
-                        }
+                    foreach my $o (@$ooo) {
+                        push @ooo_ids, @{$o}[0];
+                        push @action_ids, @{$o}[1];
+                    }
 
-                        # throw the out of order ones into a new table
-                        $tth = $gCfg{dbh}->prepare('CREATE TEMPORARY TABLE tmp AS '
-                                                   . ' SELECT * FROM PhysicalActionSchedule '
-                                                   . ' WHERE schedule_id IN '
-                                                   . ' (SELECT schedule_id FROM PhysicalActionSchedule '
-                                                   . '  WHERE parentphys = ? AND timestamp = ?)');
-                        $tth->execute($row->{parentphys}, $row->{timestamp});
+                    # throw the out of order ones into a new table
+                    $tth = $gCfg{dbh}->prepare('CREATE TEMPORARY TABLE tmp AS '
+                                               . ' SELECT * FROM PhysicalActionSchedule '
+                                               . ' WHERE schedule_id IN '
+                                               . ' (SELECT schedule_id FROM PhysicalActionSchedule '
+                                               . '  WHERE parentphys = ? AND timestamp = ?)');
+                    $tth->execute($row->{parentphys}, $row->{timestamp});
 
-                        # clear out the out of order records
-                        $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule '
-                                       . 'WHERE schedule_id IN (SELECT schedule_id FROM tmp)');
+                    # clear out the out of order records
+                    $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule '
+                                   . 'WHERE schedule_id IN (SELECT schedule_id FROM tmp)');
 
-                        # count in order entries
-                        $tth = $gCfg{dbh}->prepare('SELECT MAX(schedule_id) FROM PhysicalActionSchedule '
+                    # count in order entries
+                    $tth = $gCfg{dbh}->prepare('SELECT MAX(schedule_id) FROM PhysicalActionSchedule '
+                                               . 'WHERE timestamp = ? AND physname = ?');
+                    $tth->execute($row->{timestamp}, $row->{parentphys});
+                    my $max_sched = $tth->fetchall_arrayref()->[0][0];
+
+                    if (!defined $max_sched) {
+                        # The contents of tmp is duplicate from the child.
+                        # We've already deleted the offending entry from PhysicalActionSchedule.
+                        $tth = $gCfg{dbh}->prepare('SELECT schedule_id FROM PhysicalActionSchedule '
                                                    . 'WHERE timestamp = ? AND physname = ?');
-                        $tth->execute($row->{timestamp}, $row->{parentphys});
-                        my $max_sched = $tth->fetchall_arrayref()->[0][0];
-
-                        if (!defined $max_sched) {
-                            # The contents of tmp is duplicate from the child.
-                            # We've already deleted the offending entry from PhysicalActionSchedule.
-                            $tth = $gCfg{dbh}->prepare('SELECT schedule_id FROM PhysicalActionSchedule '
-                                                       . 'WHERE timestamp = ? AND physname = ?');
-                            $tth->execute($row->{timestamp}, $row->{physname});
-                            $max_sched = $tth->fetchall_arrayref();
-                            if (scalar @$max_sched == 1) {
-                                $gCfg{dbh}->do("INSERT INTO PhysicalActionDiscarded "
-                                               . "SELECT NULL AS discarded_id, "
-                                               . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * "
-                                               . "FROM tmp ORDER by schedule_id");
-                                $gCfg{dbh}->do('DROP TABLE tmp');
-                                ++$startover_count;
-                                goto STARTOVER;
-                            }
-                            undef $max_sched;
+                        $tth->execute($row->{timestamp}, $row->{physname});
+                        $max_sched = $tth->fetchall_arrayref();
+                        if (scalar @$max_sched == 1) {
+                            $gCfg{dbh}->do("INSERT INTO PhysicalActionDiscarded "
+                                           . "SELECT NULL AS discarded_id, "
+                                           . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * "
+                                           . "FROM tmp ORDER by schedule_id");
+                            $gCfg{dbh}->do('DROP TABLE tmp');
+                            ++$startover_count;
+                            goto STARTOVER;
                         }
+                        undef $max_sched;
+                    }
 
 #                    print "max sched: $max_sched\n";
 
-                        $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
-                                                   . 'WHERE timestamp = ? AND schedule_id > ? '
-                                                   . 'ORDER BY schedule_id');
-                        $tth->execute($row->{timestamp}, $ooo_ids[0]);
-                        $ooo = $tth->fetchall_arrayref();
+                    $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
+                                               . 'WHERE timestamp = ? AND schedule_id > ? '
+                                               . 'ORDER BY schedule_id');
+                    $tth->execute($row->{timestamp}, $ooo_ids[0]);
+                    $ooo = $tth->fetchall_arrayref();
 
-                        # renumber in order entries
-                        my $idx = 0;
-                        foreach my $o (@$ooo) {
-                            $gCfg{dbh}->do('UPDATE PhysicalActionSchedule SET schedule_id=' . ($ooo_ids[0]+$idx)
-                                           . ' WHERE schedule_id = ' . @{$o}[0] . ' AND action_id = ' . @{$o}[1]);
-                            ++$idx;
-                        }
+                    # renumber in order entries
+                    my $idx = 0;
+                    foreach my $o (@$ooo) {
+                        $gCfg{dbh}->do('UPDATE PhysicalActionSchedule SET schedule_id=' . ($ooo_ids[0]+$idx)
+                                       . ' WHERE schedule_id = ' . @{$o}[0] . ' AND action_id = ' . @{$o}[1]);
+                        ++$idx;
+                    }
 
 #                    print "out of order: " . Dumper(\@ooo_ids) . "\n";
 
-                        $tth = $gCfg{dbh}->prepare('SELECT * FROM tmp');
-                        $tth->execute();
-                        $ooo = $tth->fetchall_arrayref();
+                    $tth = $gCfg{dbh}->prepare('SELECT * FROM tmp');
+                    $tth->execute();
+                    $ooo = $tth->fetchall_arrayref();
 
 #                    print "out of order: " . Dumper($ooo) . "\n";
 
-                        # renumber the out of order entries
-                        my $idx2 = 0;
-                        foreach my $o (@ooo_ids) {
-                            my $j = ($ooo_ids[0]+$idx);
-                            print "out of order: $j $o\n" if $gCfg{debug};
+                    # renumber the out of order entries
+                    my $idx2 = 0;
+                    foreach my $o (@ooo_ids) {
+                        my $j = ($ooo_ids[0]+$idx);
+                        print "out of order: $j $o\n" if $gCfg{debug};
 
-                            my $rv = $gCfg{dbh}->do("UPDATE tmp SET schedule_id=$j WHERE schedule_id = $o "
-                                                    ."AND action_id = " . $action_ids[$idx2]);
+                        my $rv = $gCfg{dbh}->do("UPDATE tmp SET schedule_id=$j WHERE schedule_id = $o "
+                                                ."AND action_id = " . $action_ids[$idx2]);
 #                        print "rv: $rv\n";
-                            ++$idx;
-                            ++$idx2;
-                        }
+                        ++$idx;
+                        ++$idx2;
+                    }
 
 
 #                    $tth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
@@ -1983,8 +2002,8 @@ sub SchedulePhysicalActions {
 #                    $ooo = $tth->fetchall_arrayref();
 #                    print "out of order renumbered: " . Dumper($ooo) . "\n";
 
-                        $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule SELECT * FROM tmp');
-                        $gCfg{dbh}->do('DROP TABLE tmp');
+                    $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule SELECT * FROM tmp');
+                    $gCfg{dbh}->do('DROP TABLE tmp');
 
 #                    $tth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
 #                                               . 'WHERE timestamp = ? '
@@ -1993,35 +2012,32 @@ sub SchedulePhysicalActions {
 #                    $ooo = $tth->fetchall_arrayref();
 #                    print "slice entries after: " . Dumper($ooo) . "\n";
 
-                        $rescheduled = 1;
-                    }
-                    if ($rescheduled) {
-#                    print "rescheduling " . $row->{actiontype} . " for " . $row->{parentphys} . "\n";
-                        ++$startover_count;
-                        goto STARTOVER;
-                    }
+                    $rescheduled = 1;
                 }
-
-                $parentpath = $giti->{$row->{parentphys}};
-                $path = ($row->{itemtype} == VSS_PROJECT)
-                    ? File::Spec->catdir($parentpath, $row->{itemname})
-                    : File::Spec->catfile($parentpath, $row->{itemname});
-            } else {
-                # presumably this is a child entry
-                # pick a path to update
-                if (defined $row->{physname}
-                    && defined $giti->{$row->{physname}}) {
-                    $path = @{$giti->{$row->{physname}}}[0];
-                    $parentpath = dirname($path);
+                if ($rescheduled) {
+#                    print "rescheduling " . $row->{actiontype} . " for " . $row->{parentphys} . "\n";
+                    ++$startover_count;
+                    goto STARTOVER;
                 }
             }
 
-            &UpdateGitRepository($row, $parentpath, $path, $giti, 1, undef);
+            $parentpath = $giti->{$row->{parentphys}};
+            $path = ($row->{itemtype} == VSS_PROJECT)
+                ? File::Spec->catdir($parentpath, $row->{itemname})
+                : File::Spec->catfile($parentpath, $row->{itemname});
+        } else {
+            # presumably this is a child entry
+            # pick a path to update
+            if (defined $row->{physname}
+                && defined $giti->{$row->{physname}}) {
+                $path = @{$giti->{$row->{physname}}}[0];
+                $parentpath = dirname($path);
+            }
         }
-        print "done scheduling -- " . (scalar @$rows) . " rows \n";
-    }
 
-    &GetOneChangeset($timestamp);
+        &UpdateGitRepository($row, $parentpath, $path, $giti, 1, undef);
+    }
+    print "done scheduling -- " . (scalar @$rows) . " rows \n";
 }
 
 ###############################################################################
