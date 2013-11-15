@@ -2002,14 +2002,7 @@ sub ScheduleRevTime {
                                                . 'WHERE parentphys = ? AND timestamp = ? '
                                                . 'ORDER BY schedule_id');
                     $tth->execute($row->{parentphys}, $row->{timestamp});
-                    $ooo = $tth->fetchall_arrayref();
-                    my @ooo_ids;
-                    my @action_ids;
-
-                    foreach my $o (@$ooo) {
-                        push @ooo_ids, @{$o}[0];
-                        push @action_ids, @{$o}[1];
-                    }
+                    my $ooo_data = $tth->fetchall_arrayref({});
 
                     # throw the out of order ones into a new table
                     $tth = $gCfg{dbh}->prepare('CREATE TEMPORARY TABLE tmp AS '
@@ -2053,18 +2046,19 @@ sub ScheduleRevTime {
                     $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
                                                . 'WHERE timestamp = ? AND schedule_id > ? '
                                                . 'ORDER BY schedule_id');
-                    $tth->execute($row->{timestamp}, $ooo_ids[0]);
-                    $ooo = $tth->fetchall_arrayref();
+                    $tth->execute($row->{timestamp}, $ooo_data->[0]{schedule_id});
+                    $ooo = $tth->fetchall_arrayref({});
 
                     # renumber in order entries
                     my $idx = 0;
                     foreach my $o (@$ooo) {
-                        $gCfg{dbh}->do('UPDATE PhysicalActionSchedule SET schedule_id=' . ($ooo_ids[0]+$idx)
-                                       . ' WHERE schedule_id = ' . @{$o}[0] . ' AND action_id = ' . @{$o}[1]);
+                        $gCfg{dbh}->do('UPDATE PhysicalActionSchedule SET schedule_id='
+                                       . ($ooo_data->[0]{schedule_id}+$idx)
+                                       . ' WHERE schedule_id = ' . $o->{schedule_id}
+                                       . ' AND action_id = ' . $o->{action_id});
                         ++$idx;
                     }
 
-#                    print "out of order: " . Dumper(\@ooo_ids) . "\n";
 
                     $tth = $gCfg{dbh}->prepare('SELECT * FROM tmp');
                     $tth->execute();
@@ -2073,18 +2067,27 @@ sub ScheduleRevTime {
 #                    print "out of order: " . Dumper($ooo) . "\n";
 
                     # renumber the out of order entries
-                    my $idx2 = 0;
-                    foreach my $o (@ooo_ids) {
-                        my $j = ($ooo_ids[0]+$idx);
-                        print "out of order: $j $o\n" if $gCfg{debug};
-
-                        my $rv = $gCfg{dbh}->do("UPDATE tmp SET schedule_id=$j WHERE schedule_id = $o "
-                                                ."AND action_id = " . $action_ids[$idx2]);
+                    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+                    eval {
+                        my $idx2 = 0;
+                        foreach my $o (@$ooo_data) {
+                            my $j = ($ooo_data->[0]{schedule_id}+$idx);
+                            print "out of order: $j $o->{schedule_id}\n" if $gCfg{debug};
+                            my $rv = $gCfg{dbh}->do("UPDATE tmp SET schedule_id=$j "
+                                                    . "WHERE schedule_id = $o->{schedule_id} "
+                                                    . "AND action_id = $o->{action_id}");
 #                        print "rv: $rv\n";
-                        ++$idx;
-                        ++$idx2;
+                            ++$idx;
+                            ++$idx2;
+                        }
+                    };
+                    if ($@) {
+                        warn "Transaction aborted because $@";
+                        eval { $gCfg{dbh}->rollback };
+                        die "Failed to reorder out of order items: timestamp: $row->{timestamp}";
+                    } else {
+                        $gCfg{dbh}->commit;
                     }
-
 
 #                    $tth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
 #                                                  . 'WHERE timestamp = ? '
