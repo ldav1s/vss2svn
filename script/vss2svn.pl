@@ -145,15 +145,15 @@ my @joblist =
          task => TASK_REMOVETMPCHECKIN,
          handler => \&RemoveTemporaryCheckIns,
      },
-     # Fix up ACTION_ADD, ACTION_BRANCH comments
-     {
-         task => TASK_FIXUPPARENT,
-         handler => \&FixupParentActions,
-     },
      # Test git author data
      {
          task => TASK_TESTGITAUTHORINFO,
          handler => \&TestGitAuthorInfo,
+     },
+     # Fix up ACTION_ADD, ACTION_BRANCH comments
+     {
+         task => TASK_FIXUPPARENT,
+         handler => \&FixupParentActions,
      },
      # Initialize the git repo and a few in memory structures
      {
@@ -1007,7 +1007,7 @@ EOSQL
     eval {
         while (defined($row = $sth->fetchrow_hashref() )) {
             $tth->execute($row->{comment}, $row->{action_id},
-                          $row->{timestamp}-TIMESTAMP_DELTA, $row->{timestamp}+TIMESTAMP_DELTA);
+                          $row->{timestamp}-(TIMESTAMP_DELTA), $row->{timestamp}+(TIMESTAMP_DELTA));
         }
     };
 
@@ -1928,7 +1928,8 @@ sub SchedulePhysicalActions {
 
     if (defined $should_schedule && $should_schedule > 0) {
         print "timestamp range: $timestamp - " . ($timestamp+$gCfg{revtimerange}) . "\n";
-        &ScheduleRevTime($timestamp);
+        &CheckAffinity();
+        &ScheduleRevTime();
     }
 
     &GetOneChangeset($timestamp);
@@ -1938,7 +1939,6 @@ sub SchedulePhysicalActions {
 #  ScheduleRevTime
 ###############################################################################
 sub ScheduleRevTime {
-    my($timestamp) = @_;
     my($sth, $rows);
     state $index = 0;
 
@@ -2117,11 +2117,6 @@ sub ScheduleRevTime {
                 }
             }
 
-            if (&CheckRowAffinity($row)) {
-                ++$startover_count;
-                goto STARTOVER;
-            }
-
             $parentpath = $giti->{$row->{parentphys}};
             $path = ($row->{itemtype} == VSS_PROJECT)
                 ? File::Spec->catdir($parentpath, $row->{itemname})
@@ -2129,10 +2124,6 @@ sub ScheduleRevTime {
         } else {
             # presumably this is a child entry
             # pick a path to update
-            if (&CheckRowAffinity($row)) {
-                ++$startover_count;
-                goto STARTOVER;
-            }
 
             if (defined $row->{physname}
                 && defined $giti->{$row->{physname}}) {
@@ -2148,45 +2139,40 @@ sub ScheduleRevTime {
 
 
 ###############################################################################
-#  CheckRowAffinity
+#  CheckAffinity
 ###############################################################################
-sub CheckRowAffinity {
-    my ($row) = @_;
-    my($sth, $tth, $rows);
-    my $val = 0;
+sub CheckAffinity {
+    my($sth, $rows);
 
-    # reschedule non-critical rows in the schedule
+    # Attempt to schedule rows where there's multiple rows having the same
+    # timestamp.
     # Sometimes when rows share a timestamp, it's
     # obvious when looking at other fields (author, comment)
     # that they should be reordered
-    if ((defined $row->{parentphys}
-         && $row->{actiontype} eq ACTION_ADD || $row->{actiontype} eq ACTION_SHARE)
-        || !defined $row->{parentphys}) {
+    my $ath = $gCfg{dbh}->prepare('SELECT DISTINCT timestamp '
+                                  . 'FROM PhysicalActionSchedule '
+                                  . 'ORDER BY timestamp');
+    $ath->execute();
+    my $timestamps = $ath->fetchall_arrayref();
+    foreach my $t (@$timestamps) {
+        my $timestamp = $t->[0];
         my $rowcount;
 
         ($rowcount) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalActionSchedule '
                                                   . ' WHERE timestamp = ? ORDER BY schedule_id',
                                                   undef,
-                                                  $row->{timestamp});
+                                                  $timestamp);
         if ($rowcount > 1) {
             $sth = $gCfg{dbh}->prepare('CREATE TEMPORARY TABLE tmp_affinity AS '
                                        . ' SELECT 0 AS affinity, * FROM PhysicalActionSchedule '
                                        . ' WHERE timestamp = ? ORDER BY schedule_id');
-            $sth->execute($row->{timestamp});
-
-            my $ooo;
+            $sth->execute($timestamp);
 
             # grab identifying data
             $sth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id '
                                        . 'FROM tmp_affinity ORDER BY schedule_id');
             $sth->execute();
-            $ooo = $sth->fetchall_arrayref();
-            my @ooo_data;
-
-            foreach my $o (@$ooo) {
-                my $rec = { schedule_id => @{$o}[0], action_id => @{$o}[1] };
-                push @ooo_data, $rec;
-            }
+            my $ooo_data = $sth->fetchall_arrayref({});
 
             # In this scheme a negative value means pull up in the schedule,
             # 0 means no change, positive, move down the schedule.
@@ -2201,7 +2187,7 @@ sub CheckRowAffinity {
                                        . '          (SELECT MAX(timestamp) '
                                        . '           FROM PhysicalActionSchedule '
                                        . '           WHERE timestamp < ?)) LIMIT 1');
-            $sth->execute($row->{timestamp});
+            $sth->execute($timestamp);
             my $lrow;
             while (defined($lrow = $sth->fetchrow_hashref())) {
                 &UpdateRowAffinity($lrow,-1);
@@ -2218,7 +2204,7 @@ sub CheckRowAffinity {
                                        . '          (SELECT MIN(timestamp) '
                                        . '           FROM PhysicalActionSchedule '
                                        . '           WHERE timestamp > ?)) LIMIT 1');
-            $sth->execute($row->{timestamp});
+            $sth->execute($timestamp);
             while (defined($lrow = $sth->fetchrow_hashref())) {
                 &UpdateRowAffinity($lrow,1);
             }
@@ -2228,31 +2214,39 @@ sub CheckRowAffinity {
                                        . 'FROM tmp_affinity '
                                        . 'ORDER BY affinity ASC, schedule_id ASC');
             $sth->execute();
-            $ooo = $sth->fetchall_arrayref();
-            my @ino_data;
-
-            foreach my $o (@$ooo) {
-                my $rec = { schedule_id => @{$o}[0], action_id => @{$o}[1] };
-                push @ino_data, $rec;
-            }
+            my $ino_data = $sth->fetchall_arrayref({});
 
             # see if the ordering should change
-            my @oids = map { $_->{schedule_id} } @ooo_data;
-            my @iids = map { $_->{schedule_id} } @ino_data;
+            my @oids = map { $_->{schedule_id} } @$ooo_data;
+            my @iids = map { $_->{schedule_id} } @$ino_data;
 
             if (!(@oids ~~ @iids)) {
-                my $i = 0;
-                foreach my $o (@oids) {
-                    my $m = $ino_data[$i];
-                    if ($o != $m->{schedule_id}) {
-                        $gCfg{dbh}->do("UPDATE tmp_affinity SET schedule_id = $o WHERE schedule_id = $m->{schedule_id} "
-                                       ."AND action_id = $m->{action_id}");
+
+                $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+                eval {
+                    my $i = 0;
+                    foreach my $o (@oids) {
+                        my $m = $ino_data->[$i];
+                        if ($o != $m->{schedule_id}) {
+                            $gCfg{dbh}->do("UPDATE tmp_affinity SET schedule_id = $o "
+                                           . "WHERE schedule_id = $m->{schedule_id} "
+                                           ."AND action_id = $m->{action_id}");
+                        }
+                        ++$i;
                     }
-                    ++$i;
+                };
+                if ($@) {
+                    warn "Transaction aborted because $@";
+                    eval { $gCfg{dbh}->rollback };
+                    die "Failed to update affinity at time $timestamp";
+                } else {
+                    $gCfg{dbh}->commit;
                 }
+
                 # clear out the out of order records
                 $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule '
-                               . 'WHERE schedule_id IN (SELECT schedule_id FROM tmp_affinity)');
+                               . 'WHERE schedule_id '
+                               . '  IN (SELECT schedule_id FROM tmp_affinity)');
 
                 # SQLite can't drop columns, so we have this workaround...
                 my @pas_ary;
@@ -2262,14 +2256,12 @@ sub CheckRowAffinity {
                 unshift @pas_ary, ('schedule_id', 'action_id');
                 my $pas_params_sql = join q{,}, @pas_ary;
 
-                $gCfg{dbh}->do("INSERT INTO PhysicalActionSchedule SELECT $pas_params_sql FROM tmp_affinity");
-                $val = 1;
+                $gCfg{dbh}->do("INSERT INTO PhysicalActionSchedule "
+                               . "SELECT $pas_params_sql FROM tmp_affinity");
             }
             $gCfg{dbh}->do('DROP TABLE tmp_affinity');
         }
     }
-
-    return $val;
 }
 
 ###############################################################################
