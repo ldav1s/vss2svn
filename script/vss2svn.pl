@@ -2021,6 +2021,11 @@ sub ScheduleRevTime {
                 }
             }
 
+            if (&CheckRowAffinity($row)) {
+                ++$startover_count;
+                goto STARTOVER;
+            }
+
             $parentpath = $giti->{$row->{parentphys}};
             $path = ($row->{itemtype} == VSS_PROJECT)
                 ? File::Spec->catdir($parentpath, $row->{itemname})
@@ -2028,6 +2033,11 @@ sub ScheduleRevTime {
         } else {
             # presumably this is a child entry
             # pick a path to update
+            if (&CheckRowAffinity($row)) {
+                ++$startover_count;
+                goto STARTOVER;
+            }
+
             if (defined $row->{physname}
                 && defined $giti->{$row->{physname}}) {
                 $path = @{$giti->{$row->{physname}}}[0];
@@ -2039,6 +2049,162 @@ sub ScheduleRevTime {
     }
     print "done scheduling -- " . (scalar @$rows) . " rows \n";
 }
+
+
+###############################################################################
+#  CheckRowAffinity
+###############################################################################
+sub CheckRowAffinity {
+    my ($row) = @_;
+    my($sth, $tth, $rows);
+    my $val = 0;
+
+    # reschedule non-critical rows in the schedule
+    # Sometimes when rows share a timestamp, it's
+    # obvious when looking at other fields (author, comment)
+    # that they should be reordered
+    if ((defined $row->{parentphys}
+         && $row->{actiontype} eq ACTION_ADD || $row->{actiontype} eq ACTION_SHARE)
+        || !defined $row->{parentphys}) {
+        my $rowcount;
+
+        ($rowcount) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalActionSchedule '
+                                                  . ' WHERE timestamp = ? ORDER BY schedule_id',
+                                                  undef,
+                                                  $row->{timestamp});
+        if ($rowcount > 1) {
+            $sth = $gCfg{dbh}->prepare('CREATE TEMPORARY TABLE tmp_affinity AS '
+                                       . ' SELECT 0 AS affinity, * FROM PhysicalActionSchedule '
+                                       . ' WHERE timestamp = ? ORDER BY schedule_id');
+            $sth->execute($row->{timestamp});
+
+            my $ooo;
+
+            # grab identifying data
+            $sth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id '
+                                       . 'FROM tmp_affinity ORDER BY schedule_id');
+            $sth->execute();
+            $ooo = $sth->fetchall_arrayref();
+            my @ooo_data;
+
+            foreach my $o (@$ooo) {
+                my $rec = { schedule_id => @{$o}[0], action_id => @{$o}[1] };
+                push @ooo_data, $rec;
+            }
+
+            # In this scheme a negative value means pull up in the schedule,
+            # 0 means no change, positive, move down the schedule.
+
+            # check affinity with timestamp not equal to this one
+            # of previously scheduled row
+            $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
+                                       . 'WHERE schedule_id = '
+                                       . '   (SELECT MAX(schedule_id) '
+                                       . '    FROM PhysicalActionSchedule '
+                                       . '    WHERE timestamp = '
+                                       . '          (SELECT MAX(timestamp) '
+                                       . '           FROM PhysicalActionSchedule '
+                                       . '           WHERE timestamp < ?)) LIMIT 1');
+            $sth->execute($row->{timestamp});
+            my $lrow;
+            while (defined($lrow = $sth->fetchrow_hashref())) {
+                &UpdateRowAffinity($lrow,-1);
+            }
+
+            # check affinity with timestamp not equal to this one
+            # of next row. This operation might not be a good idea --
+            # these really aren't scheduled yet!
+            $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
+                                       . 'WHERE schedule_id = '
+                                       . '   (SELECT MIN(schedule_id) '
+                                       . '    FROM PhysicalActionSchedule '
+                                       . '    WHERE timestamp = '
+                                       . '          (SELECT MIN(timestamp) '
+                                       . '           FROM PhysicalActionSchedule '
+                                       . '           WHERE timestamp > ?)) LIMIT 1');
+            $sth->execute($row->{timestamp});
+            while (defined($lrow = $sth->fetchrow_hashref())) {
+                &UpdateRowAffinity($lrow,1);
+            }
+
+            # sort using affinity first
+            $sth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id '
+                                       . 'FROM tmp_affinity '
+                                       . 'ORDER BY affinity ASC, schedule_id ASC');
+            $sth->execute();
+            $ooo = $sth->fetchall_arrayref();
+            my @ino_data;
+
+            foreach my $o (@$ooo) {
+                my $rec = { schedule_id => @{$o}[0], action_id => @{$o}[1] };
+                push @ino_data, $rec;
+            }
+
+            # see if the ordering should change
+            my @oids = map { $_->{schedule_id} } @ooo_data;
+            my @iids = map { $_->{schedule_id} } @ino_data;
+
+            if (!(@oids ~~ @iids)) {
+                my $i = 0;
+                foreach my $o (@oids) {
+                    my $m = $ino_data[$i];
+                    if ($o != $m->{schedule_id}) {
+                        $gCfg{dbh}->do("UPDATE tmp_affinity SET schedule_id = $o WHERE schedule_id = $m->{schedule_id} "
+                                       ."AND action_id = $m->{action_id}");
+                    }
+                    ++$i;
+                }
+                # clear out the out of order records
+                $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule '
+                               . 'WHERE schedule_id IN (SELECT schedule_id FROM tmp_affinity)');
+
+                # SQLite can't drop columns, so we have this workaround...
+                my @pas_ary;
+                foreach my $param (@physical_action_params) {
+                    push @pas_ary, keys %$param;
+                }
+                unshift @pas_ary, ('schedule_id', 'action_id');
+                my $pas_params_sql = join q{,}, @pas_ary;
+
+                $gCfg{dbh}->do("INSERT INTO PhysicalActionSchedule SELECT $pas_params_sql FROM tmp_affinity");
+                $val = 1;
+            }
+            $gCfg{dbh}->do('DROP TABLE tmp_affinity');
+        }
+    }
+
+    return $val;
+}
+
+###############################################################################
+#  UpdateRowAffinity
+###############################################################################
+sub UpdateRowAffinity {
+    my ($lrow, $direction) = @_;
+
+    my $rth = $gCfg{dbh}->prepare("UPDATE tmp_affinity SET affinity = affinity+$direction WHERE author = ?");
+    $rth->execute($lrow->{author});
+
+    if (defined $lrow->{comment}) {
+        $rth = $gCfg{dbh}->prepare("UPDATE tmp_affinity SET affinity = affinity+$direction WHERE comment = ?");
+        $rth->execute($lrow->{comment});
+    } else {
+        $gCfg{dbh}->do("UPDATE tmp_affinity SET affinity = affinity+$direction WHERE comment IS NULL");
+    }
+
+    if ($lrow->{actiontype} eq ACTION_LABEL) {
+        $gCfg{dbh}->do("UPDATE tmp_affinity SET affinity = affinity+$direction WHERE actiontype = '@{[ACTION_LABEL]}'");
+
+        if (defined $lrow->{label}) {
+            $rth = $gCfg{dbh}->prepare("UPDATE tmp_affinity SET affinity = affinity+$direction "
+                                       . "WHERE actiontype = '@{[ACTION_LABEL]}' AND label = ?");
+            $rth->execute($lrow->{label});
+        } else {
+            $gCfg{dbh}->do("UPDATE tmp_affinity SET affinity = affinity+$direction "
+                                . "WHERE actiontype = '@{[ACTION_LABEL]}' AND label IS NULL");
+        }
+    }
+ }
 
 ###############################################################################
 #  GetOneChangeset
