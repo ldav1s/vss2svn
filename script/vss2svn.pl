@@ -87,7 +87,7 @@ use constant {
     ACTION_LABEL => 'LABEL',
 };
 
-our(%gCfg, %gSth, %gErr, $gSysOut, %gNameLookup);
+our(%gCfg, %gSth, %gErr, $gSysOut);
 
 our $VERSION = '0.11.0-nightly.$LastChangedRevision$';
 $VERSION =~ s/\$.*?(\d+).*\$/$1/; # get only the number out of the svn revision
@@ -362,7 +362,6 @@ sub LoadUpPhysical {
 ###############################################################################
 sub GetPhysVssHistory {
 
-    &LoadNameLookup;
     my $physname = '';
     my $limcount = 0;
 
@@ -489,6 +488,9 @@ sub GetVssItemVersions {
         Labeled => {type => VSS_FILE, action => ACTION_LABEL},
         );
 
+    my $namelookup = $gCfg{dbh}->selectall_hashref('SELECT offset, name FROM NameLookup',
+                                                   'offset');
+
 VERSION:
     foreach $version (@$versions) {
         $tphysname = $version->exists('Action/Physical')
@@ -528,14 +530,16 @@ VERSION:
         if ($itemtype == VSS_PROJECT
             && uc($physname) eq VSSDB_ROOT) {
             $itemname = &GetItemName($version->findvalue('Action/SSName'),
-                                     $version->findvalue('Action/SSName/@offset'));
+                                     $version->findvalue('Action/SSName/@offset'),
+                                     $namelookup);
             if ($itemname eq '$/') {
                 $itemname = '';
             }
             $tphysname = $version->findvalue('Action/Physical');
         } else {
             $itemname = &GetItemName($version->findvalue('Action/SSName'),
-                                     $version->findvalue('Action/SSName/@offset'));
+                                     $version->findvalue('Action/SSName/@offset'),
+                                     $namelookup);
         }
 
         $comment = undef;
@@ -606,7 +610,8 @@ VERSION:
             when (ACTION_RENAME) {
                 # if a rename, we store the new name in the action's 'info' field
                 $info = &GetItemName($version->findvalue('Action/NewSSName'),
-                                     $version->findvalue('Action/NewSSName/@offset'));
+                                     $version->findvalue('Action/NewSSName/@offset'),
+                                     $namelookup);
             }
             when (ACTION_BRANCH) {
                 $info = $version->findvalue('Action/Parent');
@@ -697,36 +702,19 @@ sub LoadUpPhysActionInfo {
 #  GetItemName
 ###############################################################################
 sub GetItemName {
-    my($itemname, $offset) = @_;
+    my($itemname, $offset, $namelookup) = @_;
 
-    if (defined $offset) {
-        # see if we have a better name in the cache
-        my $cachename = $gNameLookup{ $offset };
-
-        if (defined($cachename)) {
-            print "Changing name of '$itemname' to '$cachename' from "
-                  . "name cache\n" if $gCfg{debug};
-            $itemname = $cachename;
-        }
+    if (defined $offset
+        && defined $namelookup->{$offset}
+        && defined $namelookup->{$offset}->{name}) {
+        my $newname = $namelookup->{$offset}->{name};
+        print "Changing name of '$itemname' to '$newname' from "
+            . "name cache\n" if $gCfg{debug};
+        $itemname = $newname;
     }
 
     return $itemname;
-
 }  #  End GetItemName
-
-###############################################################################
-#  LoadNameLookup
-###############################################################################
-sub LoadNameLookup {
-    my($sth, $row);
-
-    $sth = $gCfg{dbh}->prepare('SELECT offset, name FROM NameLookup');
-    $sth->execute();
-
-    while(defined($row = $sth->fetchrow_hashref() )) {
-        $gNameLookup{ $row->{offset} } = Encode::decode_utf8( $row->{name} );
-    }
-}  #  End LoadNameLookup
 
 ###############################################################################
 #  TestGitAuthorInfo
