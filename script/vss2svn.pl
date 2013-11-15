@@ -38,6 +38,7 @@ use constant {
     TASK_FINDDBFILES => 'FINDDBFILES',
     TASK_GETPHYSHIST => 'GETPHYSHIST',
     TASK_REMOVETMPCHECKIN => 'REMOVETMPCHECKIN',
+    TASK_FIXUPPARENT => 'FIXUPPARENT',
     TASK_TESTGITAUTHORINFO => 'TESTGITAUTHORINFO',
     TASK_GITREAD => 'GITREAD',
     TASK_DONE => 'DONE',
@@ -65,6 +66,8 @@ use constant {
     PHYSICAL_FILES_LIMIT => 512,
     # This is arbitrary, tried to keep it fairly small
     PA_PARAMS_LIMIT => 16,
+    # This is arbitrary, tried to keep it really small
+    TIMESTAMP_DELTA => 4,
 };
 
 use constant {
@@ -141,6 +144,11 @@ my @joblist =
      {
          task => TASK_REMOVETMPCHECKIN,
          handler => \&RemoveTemporaryCheckIns,
+     },
+     # Fix up ACTION_ADD, ACTION_BRANCH comments
+     {
+         task => TASK_FIXUPPARENT,
+         handler => \&FixupParentActions,
      },
      # Test git author data
      {
@@ -922,6 +930,94 @@ DELETE FROM PhysicalAction WHERE action_id IN
 EOSQL
 
     $gCfg{dbh}->do($sql);
+
+    1;
+}
+
+###############################################################################
+# FixupParentActions
+# Fixes up typical ACTION_ADD, ACTION_BRANCH missing comment data for parents in PhysicalAction
+###############################################################################
+sub FixupParentActions {
+    my $sql = <<"EOSQL";
+SELECT B.comment AS comment, A.action_id AS action_id
+FROM (SELECT physname, action_id
+      FROM PhysicalAction
+      WHERE itemtype = ?
+      AND parentdata != 0
+      AND actiontype = '@{[ACTION_ADD]}') AS A
+NATURAL JOIN (SELECT physname, comment
+              FROM PhysicalAction
+              WHERE itemtype = ?
+              AND parentdata = 0
+              AND actiontype = '@{[ACTION_ADD]}') AS B
+EOSQL
+    my $sth = $gCfg{dbh}->prepare($sql);
+    my $tth = $gCfg{dbh}->prepare('UPDATE PhysicalAction '
+                                  .'SET comment = ? '
+                                  .'WHERE action_id = ? '
+                                  .'AND comment IS NULL ');
+    my $row;
+
+    foreach my $type (VSS_PROJECT, VSS_FILE) {
+        $sth->execute($type, $type);
+
+        $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+        eval {
+            while (defined($row = $sth->fetchrow_hashref() )) {
+                $tth->execute($row->{comment}, $row->{action_id});
+            }
+        };
+
+        if ($@) {
+            warn "Transaction aborted because $@";
+            eval { $gCfg{dbh}->rollback };
+            die "Failed to fix up ADDs";
+        } else {
+            $gCfg{dbh}->commit;
+        }
+    }
+
+    # timestamp seems to be earlier in child than parent
+    # give each branch a little wiggle room timestamp-wise
+    $sql = <<"EOSQL";
+SELECT B.comment AS comment, A.action_id AS action_id, B.timestamp AS timestamp
+FROM (SELECT physname, action_id
+      FROM PhysicalAction
+      WHERE itemtype = @{[VSS_FILE]}
+      AND parentdata != 0
+      AND actiontype = '@{[ACTION_BRANCH]}') AS A
+INNER JOIN (SELECT physname, comment, timestamp
+              FROM PhysicalAction
+              WHERE itemtype = @{[VSS_FILE]}
+              AND parentdata = 0
+              AND actiontype = '@{[ACTION_BRANCH]}') AS B
+USING (physname)
+EOSQL
+    $sth = $gCfg{dbh}->prepare($sql);
+    $tth = $gCfg{dbh}->prepare("UPDATE PhysicalAction "
+                               . "SET comment = ? "
+                               . "WHERE action_id = ? "
+                               . "AND comment IS NULL "
+                               . "AND timestamp BETWEEN ? AND ?");
+
+    $sth->execute();
+
+    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+    eval {
+        while (defined($row = $sth->fetchrow_hashref() )) {
+            $tth->execute($row->{comment}, $row->{action_id},
+                          $row->{timestamp}-TIMESTAMP_DELTA, $row->{timestamp}+TIMESTAMP_DELTA);
+        }
+    };
+
+    if ($@) {
+        warn "Transaction aborted because $@";
+        eval { $gCfg{dbh}->rollback };
+        die "Failed to fix up BRANCHes";
+    } else {
+        $gCfg{dbh}->commit;
+    }
 
     1;
 }
