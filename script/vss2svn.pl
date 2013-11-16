@@ -2856,7 +2856,7 @@ sub get_valid_ref_name {
 
     my $tagname;
 
-    if (!defined $dlabel) {
+    if (!defined $dlabel || $dlabel eq '') {
         $dlabel = "@{[PROGNAME]}-$timestamp"; # better than nothing, I suppose
         goto GENSYM;
     } else {
@@ -2967,7 +2967,7 @@ sub GitLabel {
             $repo->command('checkout', '-q', '--orphan',  $tagname);
             $repo->command('config', "branch." . $tagname . ".description",  $row->{comment}); # give it a description
             $repo->command('reset', '--hard'); # unmark all the "new" files from the commit.
-            if (defined $row->{label}) {
+            if (defined $row->{label} && $row->{label} ne '') {
                 $label_map->{$row->{label}} = $tagname;
                 print "Label `" . $row->{label} . "' is branch `$tagname'.\n";
             } else {
