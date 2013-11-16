@@ -1900,7 +1900,7 @@ sub SchedulePhysicalActions {
                                   . '  (SELECT action_id FROM PhysicalActionSchedule '
                                   . '   UNION ALL SELECT action_id FROM PhysicalActionRetired '
                                   . '   UNION ALL SELECT action_id FROM PhysicalActionDiscarded) '
-                                  . 'ORDER BY timestamp ASC, priority ASC, parentdata DESC');
+                                  . 'ORDER BY timestamp ASC, priority ASC, parentdata ASC');
     if (defined $changeset_count && $changeset_count > 0) {
         # We have unused data from the last scheduling pass, let's use it.
         $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
@@ -2351,12 +2351,11 @@ sub GetOneChangeset {
     # dump all entries incuding and after the first mismatch of comments
     # N.B. comments may be NULL
     # Again, it's at least two changesets in this case.
-    # parentdata = 0 means that there could be comments there.
     ($schedule_id) = $gCfg{dbh}->selectrow_array('SELECT MIN(B.schedule_id) '
                                                  . 'FROM (SELECT comment FROM PhysicalActionSchedule '
-                                                 . '      WHERE parentdata = 0 ORDER BY schedule_id LIMIT 1) AS A '
-                                                 . 'CROSS JOIN (SELECT schedule_id, comment FROM PhysicalActionSchedule '
-                                                 . '            WHERE parentdata = 0) AS B '
+                                                 . '      ORDER BY schedule_id LIMIT 1) AS A '
+                                                 . 'CROSS JOIN (SELECT schedule_id, comment '
+                                                 . '            FROM PhysicalActionSchedule) AS B '
                                                  . 'WHERE (A.comment IS NULL AND B.comment IS NOT NULL '
                                                  . '       OR A.comment IS NOT NULL AND B.comment IS NULL '
                                                  . '       OR A.comment IS NOT NULL AND B.comment IS NOT NULL '
@@ -2383,9 +2382,9 @@ sub GetOneChangeset {
 
     ($schedule_id) = $gCfg{dbh}->selectrow_array("SELECT MIN(B.schedule_id) "
                                                  . "FROM (SELECT actiontype FROM PhysicalActionSchedule "
-                                                 . "      WHERE parentdata = 0 ORDER BY schedule_id LIMIT 1) AS A "
-                                                 . "CROSS JOIN (SELECT schedule_id, actiontype FROM PhysicalActionSchedule "
-                                                 . "            WHERE parentdata = 0) AS B "
+                                                 . "      ORDER BY schedule_id LIMIT 1) AS A "
+                                                 . "CROSS JOIN (SELECT schedule_id, actiontype "
+                                                 . "            FROM PhysicalActionSchedule) AS B "
                                                  . "WHERE (A.actiontype = '@{[ACTION_LABEL]}' "
                                                  . "       AND B.actiontype != '@{[ACTION_LABEL]}') "
                                                  . "   OR (A.actiontype != '@{[ACTION_LABEL]}' "
@@ -2410,15 +2409,15 @@ sub GetOneChangeset {
     # Again, it's at least two labels. Even though there are no changes,
     # in a label how we are handling labels makes separating differing
     # labels into a changeset important.
-    # parentdata = 0 means that there could be labels there.
     # This should be sufficient to isolate LABEL actions, since other
     # actions won't have label data.
     ($schedule_id) = $gCfg{dbh}->selectrow_array("SELECT MIN(B.schedule_id) "
                                                  . "FROM (SELECT actiontype, label FROM PhysicalActionSchedule "
-                                                 . "      WHERE parentdata = 0 ORDER BY schedule_id LIMIT 1) AS A "
-                                                 . "CROSS JOIN (SELECT schedule_id, actiontype, label FROM PhysicalActionSchedule "
-                                                 . "            WHERE parentdata = 0) AS B "
+                                                 . "      ORDER BY schedule_id LIMIT 1) AS A "
+                                                 . "CROSS JOIN (SELECT schedule_id, actiontype, label "
+                                                 . "            FROM PhysicalActionSchedule) AS B "
                                                  . "WHERE A.actiontype = '@{[ACTION_LABEL]}' "
+                                                 . "AND B.actiontype = '@{[ACTION_LABEL]}' "
                                                  . "AND (A.label IS NULL AND B.label IS NOT NULL "
                                                  . "     OR A.label IS NOT NULL AND B.label IS NULL "
                                                  . "     OR A.label IS NOT NULL AND B.label IS NOT NULL AND A.label != B.label)");
@@ -2471,10 +2470,12 @@ sub GetOneChangeset {
     # change files.
     ($schedule_id) = $gCfg{dbh}->selectrow_array("SELECT MIN(A.schedule_id) "
                                                  . "FROM (SELECT schedule_id, actiontype, physname FROM PhysicalActionSchedule "
-                                                 . "      WHERE parentdata = 1 ORDER BY schedule_id) AS A "
+                                                 . "      WHERE itemtype = @{[VSS_FILE]} "
+                                                 . "      ORDER BY schedule_id) AS A "
                                                  . "CROSS JOIN "
                                                  . "     (SELECT schedule_id, physname FROM PhysicalActionSchedule "
-                                                 . "       WHERE parentdata = 1 ORDER BY schedule_id) AS B "
+                                                 . "      WHERE itemtype = @{[VSS_FILE]} "
+                                                 . "      ORDER BY schedule_id) AS B "
                                                  . "WHERE A.physname = B.physname AND A.schedule_id > B.schedule_id "
                                                  . "AND A.actiontype NOT IN ('@{[ACTION_SHARE]}', '@{[ACTION_BRANCH]}')");
     if ($schedule_id) {
