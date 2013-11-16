@@ -2643,10 +2643,10 @@ sub UpdateGitRepository {
                         if (defined $exported) {
                             # copy the data to the link
                             if (!$simulated) {
-                                if (!copy(File::Spec->catfile($exported,
-                                                              $row->{physname} . '.' . $row->{version}),
-                                          $link_file)) {
-                                    print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export path `$link_file' copy $!\n";
+                                my $efile = File::Spec->catfile($exported,
+                                                                $row->{physname} . '.' . $row->{version});
+                                if (!copy($efile, $link_file)) {
+                                    print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!\n";
                                 } else {
                                     $repo->run(add => '--',  $path);
                                     &RemoveKeep($repo, $parentpath);
@@ -2664,10 +2664,10 @@ sub UpdateGitRepository {
                         if (defined $exported) {
                             # copy the data to the link
                             if (!$simulated) {
-                                if (!copy(File::Spec->catfile($exported,
-                                                              $row->{physname} . '.' . $row->{version}),
-                                          $link_file)) {
-                                    print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} link path `$link_file' copy $!\n";
+                                my $efile = File::Spec->catfile($exported,
+                                                                $row->{physname} . '.' . $row->{version});
+                                if (!copy($efile, $link_file)) {
+                                    print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' link path `$link_file' copy $!\n";
                                 }
                             }
                         }
@@ -2722,7 +2722,7 @@ sub UpdateGitRepository {
 
                         if (!$simulated) {
                             if (!copy($newver, $link_file)) {
-                                print "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                                print "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} newver `$newver' path `$link_file' copy $!\n";
                             } else {
                                 $repo->run(add => '--',  $path);
                             }
@@ -2753,7 +2753,7 @@ sub UpdateGitRepository {
                             @{$git_image->{$row->{physname}}} = ("$path");
                         } else {
                             if (!copy($path, $link_file)) { # should create new file
-                                print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                                print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$path' link `$link_file' copy $!\n";
                             } else {
                                 unlink $path; # decrement any link count
                                 link $link_file, $path; # add $path as the new link
@@ -2775,7 +2775,7 @@ sub UpdateGitRepository {
                         my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
                         if (!$simulated) {
                             if (!copy($link_info, $link_file)) { # should create new file
-                                print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                                print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} info `$link_info' link `$link_file' copy $!\n";
                             }
                         }
                     }
@@ -2794,8 +2794,9 @@ sub UpdateGitRepository {
                         my $pinfile = $row->{physname} . '.' . $row->{version};
                         $link_file .= $row->{version};
                         if (defined $exported && !$simulated && ! -f $link_file) {
-                            if (!copy(File::Spec->catfile($exported, $pinfile), $link_file)) {
-                                print "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                            my $efile = File::Spec->catfile($exported, $pinfile);
+                            if (!copy($efile, $link_file)) {
+                                print "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!\n";
                             }
                         }
                     }
