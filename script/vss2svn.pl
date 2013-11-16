@@ -27,7 +27,7 @@ use Storable qw(dclone);
 
 use lib '.';
 use POSIX;
-use Git;
+use Git::Repository;
 use Data::Dumper;
 
 require Encode;
@@ -754,7 +754,7 @@ sub GitReadImage {
 
     &TimestampLimits;
 
-    my $repo = Git->repository(Directory => "$gCfg{repo}");
+    my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
 
     $last_time = $gCfg{mintime};
     $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
@@ -1651,7 +1651,8 @@ sub Initialize {
     $gCfg{revtimerange} = REVTIMERANGE unless defined($gCfg{revtimerange}) && $gCfg{revtimerange} > 0;
 
     if (! -d $gCfg{repo}) {
-        die "repo directory '$gCfg{repo}' is not a directory";
+        mkdir($gCfg{repo});
+        Git::Repository->run( init => $gCfg{repo} );
     }
 
     # set up these items now
@@ -1814,6 +1815,7 @@ OPTIONAL PARAMETERS:
                          default is '@{[REPO]}'.  It is assumed that it has been
                          initialized with 'git init' and contains appropriate
                          settings files (e.g, .gitignore, .gitattributes, etc.).
+                         If not specified, a directory is created and initialized.
     --revtimerange <sec> : specify the maximum time difference (in seconds)
                            between two VSS actions that are treated as one git commit;
                            default is @{[REVTIMERANGE]} seconds (== 1hour).
@@ -2553,7 +2555,7 @@ sub UpdateGitRepository {
                             print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_PROJECT]} copy $!\n";
                         } else {
                             $git_image->{$row->{physname}} = $path;
-                            $repo->command('add', '--',  $path);
+                            $repo->run(add => '--',  $path);
                             &RemoveKeep($repo, $parentpath);
                         }
                     }
@@ -2626,7 +2628,7 @@ sub UpdateGitRepository {
                                 }
                             }
                             link $link_file, $path;
-                            $repo->command('add', '--',  $path);
+                            $repo->run(add => '--',  $path);
                             &RemoveKeep($repo, $parentpath);
                             @{$git_image->{$row->{physname}}} = ("$path"); # may be on multiple paths
                         }
@@ -2646,7 +2648,7 @@ sub UpdateGitRepository {
                                           $link_file)) {
                                     print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export path `$link_file' copy $!\n";
                                 } else {
-                                    $repo->command('add', '--',  $path);
+                                    $repo->run(add => '--',  $path);
                                     &RemoveKeep($repo, $parentpath);
                                 }
                             }
@@ -2677,7 +2679,7 @@ sub UpdateGitRepository {
                     # Files may be renamed after DELETE(!) through a SHARE apparently
                     # so we need to check for their existence
                     my $newpath = File::Spec->catfile($parentpath, $row->{info});
-                    $repo->command('mv',  $path,  $newpath) if !$simulated && -f $path;
+                    $repo->run(mv =>  $path,  $newpath) if !$simulated && -f $path;
 
                     # remove the old path, add the new path
                     @{$git_image->{$row->{physname}}} = grep {!/^\Q$path\E$/} @{$git_image->{$row->{physname}}};
@@ -2722,7 +2724,7 @@ sub UpdateGitRepository {
                             if (!copy($newver, $link_file)) {
                                 print "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} path `$link_file' copy $!\n";
                             } else {
-                                $repo->command('add', '--',  $path);
+                                $repo->run(add => '--',  $path);
                             }
                         }
                     }
@@ -2736,7 +2738,7 @@ sub UpdateGitRepository {
                     } elsif (! -f $path) {
                         link $oldpath, $path;
                         push @{$git_image->{$row->{physname}}}, $path;
-                        $repo->command('add', '--',  $path);
+                        $repo->run(add => '--',  $path);
                         &RemoveKeep($repo, $parentpath);
                     }
                 }
@@ -2801,7 +2803,7 @@ sub UpdateGitRepository {
                     if (!$simulated) {
                         unlink $path if -f $path; # get rid of pinned/unpinned file
                         link $link_file, $path;
-                        $repo->command('add', '--',  $path);
+                        $repo->run(add => '--',  $path);
                     }
                 }
                 when (ACTION_LABEL) {
@@ -2919,25 +2921,23 @@ sub get_valid_ref_name {
 sub GitCommit {
     my($repo, $comment, $username, $timestamp) = @_;
 
-    &git_setenv($username, $timestamp);
-    $repo->command('commit', '-a', '--allow-empty-message', '--no-edit', '-m',  $comment);
+    my $map = $author_map->{$username};
 
-    my $branch = $repo->command_oneline('symbolic-ref', '-q', '--short', 'HEAD');
+    $repo->run( commit => '-a', '--allow-empty-message', '--no-edit', '-m',  $comment,
+                {
+                    env => {
+                        GIT_AUTHOR_NAME => $map->{name},
+                        GIT_AUTHOR_EMAIL => $map->{email},
+                        GIT_AUTHOR_DATE => POSIX::strftime(ISO8601_FMT, localtime($timestamp)),
+                    }
+                });
+
+    my $branch = $repo->run( 'symbolic-ref' => '-q', '--short', 'HEAD');
 
     if ($branch !~ $master_re) {
         # back to master
-        $repo->command('checkout', '-q', 'master');
+        $repo->run(checkout => '-q', 'master');
     }
-}
-
-# setup the environment for GitCommit
-sub git_setenv {
-    my($username, $timestamp) = @_;
-    my $map = $author_map->{$username};
-
-    $ENV{'GIT_AUTHOR_NAME'} = $map->{name};
-    $ENV{'GIT_AUTHOR_EMAIL'} = $map->{email};
-    $ENV{'GIT_AUTHOR_DATE'} = POSIX::strftime(ISO8601_FMT, localtime($timestamp));
 }
 
 # create or checkout a branch for a label and add files to it from master
@@ -2945,7 +2945,7 @@ sub GitLabel {
     my($row, $repo, $path, $simulated) = @_;
 
     if (!$simulated) {
-        my $branch = $repo->command_oneline('symbolic-ref', '-q', '--short', 'HEAD');
+        my $branch = $repo->run('symbolic-ref' => '-q', '--short', 'HEAD');
         my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
 
         # "git checkout master" is hampered by absolute paths in this case
@@ -2964,9 +2964,9 @@ sub GitLabel {
         if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
             # create a new branch for this label
             # undef labels are not recorded in label map
-            $repo->command('checkout', '-q', '--orphan',  $tagname);
-            $repo->command('config', "branch." . $tagname . ".description",  $row->{comment}); # give it a description
-            $repo->command('reset', '--hard'); # unmark all the "new" files from the commit.
+            $repo->run(checkout => '-q', '--orphan',  $tagname);
+            $repo->run(config => "branch." . $tagname . ".description",  $row->{comment}); # give it a description
+            $repo->run(reset => '--hard'); # unmark all the "new" files from the commit.
             if (defined $row->{label} && $row->{label} ne '') {
                 $label_map->{$row->{label}} = $tagname;
                 print "Label `" . $row->{label} . "' is branch `$tagname'.\n";
@@ -2974,9 +2974,9 @@ sub GitLabel {
                 print "undef label is branch `$tagname' at timestamp $row->{timestamp}.\n";
             }
         } elsif ($branch =~ $master_re) {
-            $repo->command('checkout', '-q', $tagname);
+            $repo->run(checkout => '-q', $tagname);
         }
-        $repo->command('checkout', '-q', 'master', '--',  $tmppath);
+        $repo->run(checkout => '-q', 'master', '--',  $tmppath);
     }
 }
 
@@ -2987,7 +2987,7 @@ sub DoMoveProject {
     if ($simulated) {
         &MoveProject($path, $newpath, $git_image);
     } elsif ($newtest ? (! -d $newpath) : (-d $path)) {
-        $repo->command('mv',  $path,  $newpath);
+        $repo->run(mv =>  $path,  $newpath);
         # N.B. inode should _not_ have changed during move
         &MoveProject($path, $newpath, $git_image);
     }
@@ -2999,7 +2999,7 @@ sub RemoveKeep {
 
     my $keep = File::Spec->catfile($parentpath, KEEP_FILE);
 
-    $repo->command('rm', '-f', '-q', '--',  $keep) if -f $keep;
+    $repo->run(rm => '-f', '-q', '--',  $keep) if -f $keep;
 }
 
 # handle the recover
@@ -3027,8 +3027,8 @@ sub GitRecover {
             when (VSS_PROJECT) {
                 # easier to recover from git
                 if (!$action_id) {
-                    my $rev = $repo->command_oneline('rev-list', '-n', '1', 'HEAD', '--',  $path);
-                    $repo->command('checkout', '-q', "$rev^", '--',  $path);
+                    my $rev = $repo->run('rev-list' => '-n', '1', 'HEAD', '--',  $path);
+                    $repo->run(checkout => '-q', "$rev^", '--',  $path);
                     $git_image->{$row->{physname}} = $path;
                 } else {
                     # XXX don't know what to do here
@@ -3054,7 +3054,7 @@ sub GitRecover {
                         }
                     }
                 }
-                $repo->command('add', '--',  $path);
+                $repo->run(add => '--',  $path);
                 &RemoveKeep($repo, dirname($path));
                 @{$git_image->{$row->{physname}}} = ("$path");
             }
@@ -3072,7 +3072,7 @@ sub GitRm {
         print "GitRm: path `$keepfile' copy $!\n";
     }
 
-    $repo->command('rm', ($itemtype == VSS_PROJECT ? '-rf' : '-f'), '-q', '--',  $path);
+    $repo->run(rm => ($itemtype == VSS_PROJECT ? '-rf' : '-f'), '-q', '--',  $path);
 
     # count the files in parentpath to see if the keep file should be added
     opendir(my $DIR, $parentpath);
@@ -3080,7 +3080,7 @@ sub GitRm {
     closedir $DIR;
 
     if ($parentpath_dir_files == 3) {
-        $repo->command('add', '--',  $keepfile);
+        $repo->run(add => '--',  $keepfile);
     } else {
         unlink $keepfile;
     }

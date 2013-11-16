@@ -14,6 +14,7 @@ Module::Build->new
 	  'Data::UUID' => 0,
 	  'File::Find' => 0,
 	  'File::Path' => 0,
+	  'Git::Repository' => '>= 1.27',
 	  'Time::CTime' => 0,
           'Git' => 0,
           'Hash::Case' => 0,
