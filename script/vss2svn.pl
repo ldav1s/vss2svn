@@ -2765,8 +2765,10 @@ sub UpdateGitRepository {
                         if ($simulated) {
                             @{$git_image->{$row->{physname}}} = ("$path");
                         } else {
-                            if (!copy($path, $link_file)) { # should create new file
-                                print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$path' link `$link_file' copy $!\n";
+                            my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
+                            my $p = ((-f $link_info) ? $link_info : $path);
+                            if (!copy($p, $link_file)) { # should create new file
+                                print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$p' link `$link_file' copy $!\n";
                             } else {
                                 unlink $path; # decrement any link count
                                 link $link_file, $path; # add $path as the new link
