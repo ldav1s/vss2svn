@@ -30,3 +30,11 @@ This is very experimental right now, and might be kind of broken.
 Also it'll only work on Linux for now, because it supports hard links
 to emulate "shares".
 
+Caveats:
+
+Migration should be performed on a case-insensitive filesystem that is
+able to support hard links, such as JFS, ZFS or NTFS.
+[ciopfs](http://www.brain-dump.org/projects/ciopfs) might work as
+well, but seemed slow when I tried it in comparison with JFS.
+Labels will be treated case-insensitively as well, since they will be
+stored in the git repository that way.

@@ -13,6 +13,7 @@ use Getopt::Long;
 use Data::UUID;
 use DBI;
 use DBD::SQLite;
+use Hash::Case::Preserve;
 use XML::LibXML;
 use File::Basename;
 use File::Copy;
@@ -27,10 +28,8 @@ use Storable qw(dclone);
 
 use lib '.';
 use POSIX;
-use Git::Repository;
+use Git::Repository qw( +Vss2Svn2Git::GitLogger );
 use Data::Dumper;
-
-require Encode;
 
 use constant {
     TASK_INIT => 'INIT',
@@ -52,6 +51,7 @@ use constant {
     VSS_PROJECT => 1,
     VSS_FILE => 2,
     BRANCH_TMP_FILE => '.vss2svn2gitbranchtmp',
+    MOVE_TMP_FILE => '.vss2svn2gitmovetmp',
     KEEP_FILE => '.vss2svn2gitkeep',
     VSS2SVN2GIT_NS => 'ns:vss2svn2git',
     PROGNAME => 'vss2svn2git',
@@ -106,7 +106,10 @@ my %git_image = ();
 # unique name will be generated for it (and not added here).  If the label is
 # defined but the branch name algorithm fails to generate a "fixed up" version
 # it will also be given a generated name and stored here.
+# N.B. This must be case insensitive also since git will be storing them that way
+# on a case-insensitive filesystem.
 my $label_map = ();
+tie %{$label_map}, 'Hash::Case::Preserve';
 
 # The author map maps VSS author information to git author information
 my $author_map = ();
@@ -755,6 +758,8 @@ sub GitReadImage {
     &TimestampLimits;
 
     my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
+
+    $repo->setlog($gCfg{debug});
 
     $last_time = $gCfg{mintime};
     $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
@@ -2568,7 +2573,7 @@ sub UpdateGitRepository {
                             print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_PROJECT]} copy $!\n";
                         } else {
                             $git_image->{$row->{physname}} = $path;
-                            $repo->run(add => '--',  $path);
+                            $repo->logrun(add => '--',  $path);
                             &RemoveKeep($repo, $parentpath);
                         }
                     }
@@ -2641,7 +2646,7 @@ sub UpdateGitRepository {
                                 }
                             }
                             link $link_file, $path;
-                            $repo->run(add => '--',  $path);
+                            $repo->logrun(add => '--',  $path);
                             &RemoveKeep($repo, $parentpath);
                             @{$git_image->{$row->{physname}}} = ("$path"); # may be on multiple paths
                         }
@@ -2661,7 +2666,7 @@ sub UpdateGitRepository {
                                 if (!copy($efile, $link_file)) {
                                     print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!\n";
                                 } else {
-                                    $repo->run(add => '--',  $path);
+                                    $repo->logrun(add => '--',  $path);
                                     &RemoveKeep($repo, $parentpath);
                                 }
                             }
@@ -2692,7 +2697,11 @@ sub UpdateGitRepository {
                     # Files may be renamed after DELETE(!) through a SHARE apparently
                     # so we need to check for their existence
                     my $newpath = File::Spec->catfile($parentpath, $row->{info});
-                    $repo->run(mv =>  $path,  $newpath) if !$simulated && -f $path;
+                    if (!$simulated && -f $path) {
+                        my $tmp_mv = File::Spec->catfile(dirname($newpath), MOVE_TMP_FILE);
+                        $repo->logrun(mv =>  $path,  $tmp_mv);
+                        $repo->logrun(mv =>  $tmp_mv,  $newpath);
+                    }
 
                     # remove the old path, add the new path
                     @{$git_image->{$row->{physname}}} = grep {!/^\Q$path\E$/} @{$git_image->{$row->{physname}}};
@@ -2737,7 +2746,7 @@ sub UpdateGitRepository {
                             if (!copy($newver, $link_file)) {
                                 print "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} newver `$newver' path `$link_file' copy $!\n";
                             } else {
-                                $repo->run(add => '--',  $path);
+                                $repo->logrun(add => '--',  $path);
                             }
                         }
                     }
@@ -2751,7 +2760,7 @@ sub UpdateGitRepository {
                     } elsif (! -f $path) {
                         link $oldpath, $path;
                         push @{$git_image->{$row->{physname}}}, $path;
-                        $repo->run(add => '--',  $path);
+                        $repo->logrun(add => '--',  $path);
                         &RemoveKeep($repo, $parentpath);
                     }
                 }
@@ -2819,7 +2828,7 @@ sub UpdateGitRepository {
                     if (!$simulated) {
                         unlink $path if -f $path; # get rid of pinned/unpinned file
                         link $link_file, $path;
-                        $repo->run(add => '--',  $path);
+                        $repo->logrun(add => '--',  $path);
                     }
                 }
                 when (ACTION_LABEL) {
@@ -2939,7 +2948,7 @@ sub GitCommit {
 
     my $map = $author_map->{$username};
 
-    $repo->run( commit => '-a', '--allow-empty-message', '--no-edit', '-m',  $comment,
+    $repo->logrun( commit => '-a', '--allow-empty-message', '--no-edit', '-m',  $comment,
                 {
                     env => {
                         GIT_AUTHOR_NAME => $map->{name},
@@ -2948,11 +2957,11 @@ sub GitCommit {
                     }
                 });
 
-    my $branch = $repo->run( 'symbolic-ref' => '-q', '--short', 'HEAD');
+    my $branch = $repo->logrun( 'symbolic-ref' => '-q', '--short', 'HEAD');
 
     if ($branch !~ $master_re) {
         # back to master
-        $repo->run(checkout => '-q', 'master');
+        $repo->logrun(checkout => '-q', 'master');
     }
 }
 
@@ -2961,7 +2970,7 @@ sub GitLabel {
     my($row, $repo, $path, $simulated) = @_;
 
     if (!$simulated) {
-        my $branch = $repo->run('symbolic-ref' => '-q', '--short', 'HEAD');
+        my $branch = $repo->logrun('symbolic-ref' => '-q', '--short', 'HEAD');
         my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
 
         # "git checkout master" is hampered by absolute paths in this case
@@ -2980,9 +2989,9 @@ sub GitLabel {
         if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
             # create a new branch for this label
             # undef labels are not recorded in label map
-            $repo->run(checkout => '-q', '--orphan',  $tagname);
-            $repo->run(config => "branch." . $tagname . ".description",  $row->{comment}); # give it a description
-            $repo->run(reset => '--hard'); # unmark all the "new" files from the commit.
+            $repo->logrun(checkout => '-q', '--orphan',  $tagname);
+            $repo->logrun(config => "branch." . $tagname . ".description",  $row->{comment}); # give it a description
+            $repo->logrun(reset => '--hard'); # unmark all the "new" files from the commit.
             if (defined $row->{label} && $row->{label} ne '') {
                 $label_map->{$row->{label}} = $tagname;
                 print "Label `" . $row->{label} . "' is branch `$tagname'.\n";
@@ -2990,9 +2999,9 @@ sub GitLabel {
                 print "undef label is branch `$tagname' at timestamp $row->{timestamp}.\n";
             }
         } elsif ($branch =~ $master_re) {
-            $repo->run(checkout => '-q', $tagname);
+            $repo->logrun(checkout => '-q', $tagname);
         }
-        $repo->run(checkout => '-q', 'master', '--',  $tmppath);
+        $repo->logrun(checkout => '-q', 'master', '--',  $tmppath);
     }
 }
 
@@ -3003,7 +3012,9 @@ sub DoMoveProject {
     if ($simulated) {
         &MoveProject($path, $newpath, $git_image);
     } elsif ($newtest ? (! -d $newpath) : (-d $path)) {
-        $repo->run(mv =>  $path,  $newpath);
+        my $tmp_mv = File::Spec->catdir(dirname($newpath), MOVE_TMP_FILE);
+        $repo->logrun(mv =>  $path,  $tmp_mv);
+        $repo->logrun(mv =>  $tmp_mv,  $newpath);
         # N.B. inode should _not_ have changed during move
         &MoveProject($path, $newpath, $git_image);
     }
@@ -3015,7 +3026,7 @@ sub RemoveKeep {
 
     my $keep = File::Spec->catfile($parentpath, KEEP_FILE);
 
-    $repo->run(rm => '-f', '-q', '--',  $keep) if -f $keep;
+    $repo->logrun(rm => '-f', '-q', '--',  $keep) if -f $keep;
 }
 
 # handle the recover
@@ -3043,8 +3054,8 @@ sub GitRecover {
             when (VSS_PROJECT) {
                 # easier to recover from git
                 if (!$action_id) {
-                    my $rev = $repo->run('rev-list' => '-n', '1', 'HEAD', '--',  $path);
-                    $repo->run(checkout => '-q', "$rev^", '--',  $path);
+                    my $rev = $repo->logrun('rev-list' => '-n', '1', 'HEAD', '--',  $path);
+                    $repo->logrun(checkout => '-q', "$rev^", '--',  $path);
                     $git_image->{$row->{physname}} = $path;
                 } else {
                     # XXX don't know what to do here
@@ -3070,7 +3081,7 @@ sub GitRecover {
                         }
                     }
                 }
-                $repo->run(add => '--',  $path);
+                $repo->logrun(add => '--',  $path);
                 &RemoveKeep($repo, dirname($path));
                 @{$git_image->{$row->{physname}}} = ("$path");
             }
@@ -3088,7 +3099,7 @@ sub GitRm {
         print "GitRm: path `$keepfile' copy $!\n";
     }
 
-    $repo->run(rm => ($itemtype == VSS_PROJECT ? '-rf' : '-f'), '-q', '--',  $path);
+    $repo->logrun(rm => ($itemtype == VSS_PROJECT ? '-rf' : '-f'), '-q', '--',  $path);
 
     # count the files in parentpath to see if the keep file should be added
     opendir(my $DIR, $parentpath);
@@ -3096,7 +3107,7 @@ sub GitRm {
     closedir $DIR;
 
     if ($parentpath_dir_files == 3) {
-        $repo->run(add => '--',  $keepfile);
+        $repo->logrun(add => '--',  $keepfile);
     } else {
         unlink $keepfile;
     }

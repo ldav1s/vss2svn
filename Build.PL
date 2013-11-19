@@ -23,5 +23,6 @@ Module::Build->new
           'Data::Dumper' => 0,
       },
       script_files => { 'script/vss2svn.pl' => 'script/vss2svn.pl', 'ssphys/ssphys' => 'bin/ssphys'},
+      pm_files => { 'script/Vss2Svn2Git/GitLogger.pm' => 'lib/Vss2Svn2Git/GitLogger.pm' },
       PL_files => { 'ssphys/ssphys.PL' => 'bin/ssphys' },
       )->create_build_script;
