@@ -2454,7 +2454,7 @@ sub GetOneChangeset {
                                                  . "WHERE itemtype = @{[VSS_PROJECT]} AND actiontype IN "
                                                  . "('@{[ACTION_RESTOREDPROJECT]}', '@{[ACTION_RENAME]}', "
                                                  . "'@{[ACTION_DELETE]}', '@{[ACTION_DESTROY]}', '@{[ACTION_RECOVER]}', "
-                                                 . "'@{[ACTION_RESTORE]}')");
+                                                 . "'@{[ACTION_RESTORE]}', '@{[ACTION_MOVE_TO]}', '@{[ACTION_MOVE_FROM]}')");
     if ($schedule_id) {
         $isth->execute($schedule_id);
         $dsth->execute($schedule_id);
