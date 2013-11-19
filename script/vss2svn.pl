@@ -2698,9 +2698,14 @@ sub UpdateGitRepository {
                     # so we need to check for their existence
                     my $newpath = File::Spec->catfile($parentpath, $row->{info});
                     if (!$simulated && -f $path) {
-                        my $tmp_mv = File::Spec->catfile(dirname($newpath), MOVE_TMP_FILE);
-                        $repo->logrun(mv =>  $path,  $tmp_mv);
-                        $repo->logrun(mv =>  $tmp_mv,  $newpath);
+                        # check for renames involving case only
+                        if ($path =~ /^\Q$newpath\E$/i) {
+                            my $tmp_mv = File::Spec->catfile(dirname($path), MOVE_TMP_FILE);
+                            $repo->logrun(mv =>  $path,  $tmp_mv);
+                            $repo->logrun(mv =>  $tmp_mv,  $newpath);
+                        } else {
+                            $repo->logrun(mv =>  $path,  $newpath);
+                        }
                     }
 
                     # remove the old path, add the new path
@@ -3012,9 +3017,13 @@ sub DoMoveProject {
     if ($simulated) {
         &MoveProject($path, $newpath, $git_image);
     } elsif ($newtest ? (! -d $newpath) : (-d $path)) {
-        my $tmp_mv = File::Spec->catdir(dirname($newpath), MOVE_TMP_FILE);
-        $repo->logrun(mv =>  $path,  $tmp_mv);
-        $repo->logrun(mv =>  $tmp_mv,  $newpath);
+        if ($path =~ /^\Q$newpath\E$/i) {
+            my $tmp_mv = File::Spec->catdir(dirname($path), MOVE_TMP_FILE);
+            $repo->logrun(mv =>  $path,  $tmp_mv);
+            $repo->logrun(mv =>  $tmp_mv,  $newpath);
+        } else {
+            $repo->logrun(mv =>  $path,  $newpath);
+        }
         # N.B. inode should _not_ have changed during move
         &MoveProject($path, $newpath, $git_image);
     }
