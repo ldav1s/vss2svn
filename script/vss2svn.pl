@@ -1103,7 +1103,7 @@ sub ExportVssPhysFile {
 
     $physname =~ m/^(..)/;
 
-    my $exportdir = "$gCfg{vssdata}/$1";
+    my $exportdir = File::Spec->catdir($gCfg{vssdata}, $1);
 
     make_path($exportdir) if ! -e $exportdir;
     $row = $gCfg{dbh}->selectrow_arrayref("SELECT datapath FROM Physical WHERE physname = ?", undef, $physname);
@@ -1136,18 +1136,22 @@ sub ExportVssPhysFile {
         $version = 1;
     }
 
-    if (! -e "$exportdir/$physname.$version" ) {
+    my $exportfile = File::Spec->catfile($exportdir, "$physname.$version");
+
+    if (! -e $exportfile) {
         # get all versions we can find from the physical file
         my @cmd = ('get', '-b', "-v$version", '--force-overwrite',
                    "-e$gCfg{encoding}", $physpath,
                    File::Spec->catdir($exportdir, $physname));
         &DoSsCmd(@cmd);
-        if (! -e "$exportdir/$physname.$version") {
+        if (! -e $exportfile) {
             $physpath = &CheckForDestroy($exportdir, $physname, $version, 0);
         }
     }
 
-    return $exportdir;
+    print "ExportVssPhysFile: $exportfile\n" if $gCfg{debug};
+
+    return $exportfile;
 }  #  End ExportVssPhysFile
 
 ###############################################################################
@@ -2684,13 +2688,11 @@ sub UpdateGitRepository {
                         my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
 
                         $path = @{$git_image->{$row->{physname}}}[0];
-                        my $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
+                        my $efile = &ExportVssPhysFile($row->{physname}, $row->{version});
 
-                        if (defined $exported) {
+                        if (defined $efile) {
                             # copy the data to the link
                             if (!$simulated) {
-                                my $efile = File::Spec->catfile($exported,
-                                                                $row->{physname} . '.' . $row->{version});
                                 if (!copy($efile, $link_file)) {
                                     print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!\n";
                                 } else {
@@ -2705,13 +2707,11 @@ sub UpdateGitRepository {
                         # This step seems to happen chronologically first before
                         # writing the parent info, so they may be in different timestamps
                         my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
-                        my $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
+                        my $efile = &ExportVssPhysFile($row->{physname}, $row->{version});
 
-                        if (defined $exported) {
+                        if (defined $efile) {
                             # copy the data to the link
                             if (!$simulated) {
-                                my $efile = File::Spec->catfile($exported,
-                                                                $row->{physname} . '.' . $row->{version});
                                 if (!copy($efile, $link_file)) {
                                     print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' link path `$link_file' copy $!\n";
                                 }
@@ -2769,10 +2769,9 @@ sub UpdateGitRepository {
                 }
                 when (ACTION_COMMIT) {
                     # only recorded in the child
-                    my $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
+                    my $newver = &ExportVssPhysFile($row->{physname}, $row->{version});
 
-                    if (defined $exported) {
-                        my $newver = File::Spec->catfile($exported, $row->{physname} . '.' . $row->{version});
+                    if (defined $newver) {
                         my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
 
                         if (!$simulated) {
@@ -2847,11 +2846,9 @@ sub UpdateGitRepository {
                         # There's not a really good way to do this, since
                         # git doesn't suport this, nor do most Linux filesystems.
                         # Find the old version and copy it over...
-                        my $exported = &ExportVssPhysFile($row->{physname}, $row->{version});
-                        my $pinfile = $row->{physname} . '.' . $row->{version};
+                        my $efile = &ExportVssPhysFile($row->{physname}, $row->{version});
                         $link_file .= $row->{version};
-                        if (defined $exported && !$simulated && ! -f $link_file) {
-                            my $efile = File::Spec->catfile($exported, $pinfile);
+                        if (defined $efile && !$simulated && ! -f $link_file) {
                             if (!copy($efile, $link_file)) {
                                 print "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!\n";
                             }
