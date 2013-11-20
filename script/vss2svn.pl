@@ -1012,6 +1012,34 @@ EOSQL
         $gCfg{dbh}->commit;
     }
 
+    # When a VSS_PROJECT is moved, it duplicates the ADD from the
+    # project that contained the moved project before the move.
+    # This is bad for our move implementation,
+    # so scrap these non-parentdata ADD records.
+$sql = <<"EOSQL";
+DELETE FROM PhysicalAction
+WHERE action_id IN
+(SELECT C.action_id AS action_id
+FROM (SELECT physname, parentphys
+      FROM PhysicalAction
+      WHERE actiontype = '@{[ACTION_ADD]}'
+      AND parentdata != 0
+      AND itemtype = @{[VSS_PROJECT]}) AS A
+INNER JOIN (SELECT physname, parentphys
+            FROM PhysicalAction
+            WHERE actiontype = '@{[ACTION_MOVE_TO]}'
+            AND parentdata != 0
+            AND itemtype = @{[VSS_PROJECT]}) AS B
+USING (physname, parentphys)
+INNER JOIN (SELECT action_id, physname
+      FROM PhysicalAction
+      WHERE actiontype = '@{[ACTION_ADD]}'
+      AND parentdata = 0
+      AND itemtype = @{[VSS_PROJECT]}) AS C
+USING (physname))
+EOSQL
+    $gCfg{dbh}->do($sql);
+
     1;
 }
 
