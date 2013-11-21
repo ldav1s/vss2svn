@@ -1751,6 +1751,10 @@ sub Initialize {
     # All VSS_FILE entries, not just those shared/pinned will be linked here.
     $gCfg{links} = File::Spec->catdir($gCfg{tempdir}, 'links');
 
+    # Directory for implementing file delete/restore for directories
+    # All deleted VSS_PROJECT entries get moved here while deleted
+    $gCfg{deleted} = File::Spec->catdir($gCfg{tempdir}, 'deleted');
+
     $gCfg{resume} = 1 if defined $gCfg{task} && ($gCfg{task} ne TASK_INIT);
 
     if ($gCfg{resume} && !-e $gCfg{sqlitedb}) {
@@ -1793,6 +1797,9 @@ sub Initialize {
     mkdir $gCfg{vssdata};
     rmtree($gCfg{links}) if (-e $gCfg{links});
     mkdir $gCfg{links};
+
+    rmtree($gCfg{deleted}) if (-e $gCfg{deleted});
+    mkdir $gCfg{deleted};
 
     &WriteDestroyedPlaceholderFiles();
 
@@ -2642,7 +2649,7 @@ sub UpdateGitRepository {
                         &RmProject($path, $git_image);
                     } elsif (-d $path) {
                         &RmProject($path, $git_image);
-                        &GitRm($repo, $parentpath, $path, $row->{itemtype});
+                        &GitRm($repo, $parentpath, $path, $row->{itemtype}, $row->{actiontype}, $row->{action_id});
                     }
                 }
                 when (ACTION_RECOVER) {
@@ -2758,7 +2765,7 @@ sub UpdateGitRepository {
                             print "UpdateGitRepository delete @{[VSS_FILE]}: deleting git image $row->{physname}\n" if $gCfg{debug};
                             delete $git_image->{$row->{physname}};
                         }
-                        &GitRm($repo, $parentpath, $path, $row->{itemtype});
+                        &GitRm($repo, $parentpath, $path, $row->{itemtype}, $row->{actiontype}, $row->{action_id});
                     }
                 }
                 when (ACTION_RECOVER) {
@@ -3074,25 +3081,40 @@ sub GitRecover {
                                                   . "WHERE physname = ? AND actiontype = '@{[ACTION_DESTROY]}' "
                                                   . "LIMIT 1", # just in case
                                                   undef, $row->{physname});
+    my ($action_id_del) =  $gCfg{dbh}->selectrow_array("SELECT action_id "
+                                                       . "FROM PhysicalAction "
+                                                       . "WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
+                                                       . "AND timestamp =  "
+                                                       . "(SELECT MAX(timestamp) "
+                                                       . " FROM PhysicalAction "
+                                                       . " WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
+                                                       . " AND timestamp < ?)",
+                                                       undef, $row->{physname}, $row->{physname}, $row->{timestamp});
+
     if ($simulated) {
         for ($row->{itemtype}) {
             when (VSS_PROJECT) {
-                if (!$action_id) {
+                if (!$action_id && defined $action_id_del) {
                     $git_image->{$row->{physname}} = $path;
                 }
             }
             when (VSS_FILE) {
-                @{$git_image->{$row->{physname}}} = ("$path");
+                if ((!$action_id && defined $action_id_del) || $action_id) {
+                    @{$git_image->{$row->{physname}}} = ("$path");
+                }
             }
         }
     } elsif (! -e $path) {
         for ($row->{itemtype}) {
             when (VSS_PROJECT) {
-                # easier to recover from git
                 if (!$action_id) {
-                    my $rev = $repo->logrun('rev-list' => '-n', '1', 'HEAD', '--',  $path);
-                    $repo->logrun(checkout => '-q', "$rev^", '--',  $path);
-                    $git_image->{$row->{physname}} = $path;
+                    if (defined $action_id_del) {
+                        my $delete_loc = File::Spec->catdir($gCfg{deleted}, $action_id_del);
+                        if (!move($delete_loc, $path)) {
+                            print "GitRecover: move project delete loc: `$delete_loc' path: `$path' $!\n";
+                        }
+                        $git_image->{$row->{physname}} = $path;
+                    }
                 } else {
                     # XXX don't know what to do here
                     # probably should do nothing anyway
@@ -3101,9 +3123,14 @@ sub GitRecover {
             when (VSS_FILE) {
                 my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
                 if (!$action_id) {
-                    # These will exist in git history, bring them back.
-                    # Must do it this way for RENAMEing SHAREd files after DELETE
-                    link $link_file, $path;
+                    if (defined $action_id_del) {
+                        my $delete_loc = File::Spec->catfile($gCfg{deleted}, $action_id_del);
+                        if (!move($delete_loc, $path)) {
+                            print "GitRecover: move file delete loc: `$delete_loc' path: `$path' $!\n";
+                        } else {
+                            @{$git_image->{$row->{physname}}} = ("$path");
+                        }
+                    }
                 } else {
                     if (-f $link_file) {
                         # we have a backup from history (we were BRANCHed)
@@ -3116,23 +3143,36 @@ sub GitRecover {
                             link $link_file, $path;
                         }
                     }
+                    @{$git_image->{$row->{physname}}} = ("$path");
                 }
                 $repo->logrun(add => '--',  $path);
                 &RemoveKeep($repo, dirname($path));
-                @{$git_image->{$row->{physname}}} = ("$path");
             }
         }
     }
 }
 
 sub GitRm {
-    my($repo, $parentpath, $path, $itemtype) = @_;
+    my($repo, $parentpath, $path, $itemtype, $actiontype, $action_id) = @_;
 
     # add back the keep file before 'git rm', so we don't have to reset
     # inode bookkeeping
     my $keepfile = File::Spec->catfile($parentpath, KEEP_FILE);
     if (!copy($gCfg{keepFile}, $keepfile)) {
         print "GitRm: path `$keepfile' copy $!\n";
+    }
+
+    if ($actiontype eq ACTION_DELETE) {
+        # these can be restored, so lets move them to a safe location
+        my $delete_loc;
+        if ($itemtype == VSS_PROJECT) {
+            $delete_loc = File::Spec->catdir($gCfg{deleted}, $action_id);
+        } else {
+            $delete_loc = File::Spec->catfile($gCfg{deleted}, $action_id);
+        }
+        if (!move($path, $delete_loc)) {
+            print "GitRm: move path: `$path' delete loc: `$delete_loc' $!\n";
+        }
     }
 
     $repo->logrun(rm => ($itemtype == VSS_PROJECT ? '-rf' : '-f'), '-q', '--',  $path);
