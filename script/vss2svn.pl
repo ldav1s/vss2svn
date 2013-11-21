@@ -172,20 +172,20 @@ my @joblist =
 
 # Data for PhyicalAction table
 my @physical_action_params = (
-{        'physname' =>    'VARCHAR' },
-{        'version' =>     'INTEGER'},
-{        'parentphys' =>  'VARCHAR'},
-{        'actiontype' =>  'VARCHAR'},
-{        'itemname' =>    'VARCHAR'},
-{        'itemtype' =>    'INTEGER'},
-{        'timestamp' =>   'INTEGER'},
-{        'author' =>      'VARCHAR'},
-{        'is_binary' =>   'INTEGER'},
-{        'info' =>        'VARCHAR'},
-{        'priority' =>    'INTEGER'},
-{        'parentdata' =>  'INTEGER'},
-{        'label' =>       'VARCHAR'},
-{        'comment' =>     'TEXT'},
+    { 'physname' =>    'VARCHAR' },
+    { 'version' =>     'INTEGER' },
+    { 'parentphys' =>  'VARCHAR' },
+    { 'actiontype' =>  'VARCHAR' },
+    { 'itemname' =>    'VARCHAR' },
+    { 'itemtype' =>    'INTEGER' },
+    { 'timestamp' =>   'INTEGER' },
+    { 'author' =>      'VARCHAR' },
+    { 'is_binary' =>   'INTEGER' },
+    { 'info' =>        'VARCHAR' },
+    { 'priority' =>    'INTEGER' },
+    { 'parentdata' =>  'INTEGER' },
+    { 'label' =>       'VARCHAR' },
+    { 'comment' =>     'TEXT' },
     );
 
 &Initialize;
