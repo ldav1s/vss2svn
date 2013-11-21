@@ -847,11 +847,12 @@ sub GitReadImage {
     # SO is CC BY-SA 3.0 <http://creativecommons.org/licenses/by-sa/3.0/>
     # at the time of this writing.
     my @shares = ();
+    my $repo_re = qr/^\Q$gCfg{repo}\E./; # XXX not portable
     foreach my $key (keys %git_image) {
         if (ref($git_image{$key})) {
             my $ary = $git_image{$key};
             my $base = shift @$ary;
-            $base =~ s/^\Q$gCfg{repo}\E.//; # XXX not portable
+            $base =~ s/$repo_re//;
 
             if (scalar @$ary > 0) {
                 my @basedir = File::Spec->splitdir($base);
@@ -868,6 +869,7 @@ sub GitReadImage {
                 # synthesize the hard link
                 # XXX This could be a shell quoting nightmare...
                 foreach my $e (@$ary) {
+                    $e =~ s/$repo_re//;
                     my @edir = File::Spec->splitdir($e);
                     unshift @edir, File::Spec->updir();
                     unshift @edir, '$GIT_DIR';
