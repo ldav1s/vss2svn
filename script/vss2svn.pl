@@ -1507,7 +1507,7 @@ sub InitSysTables {
     $sql = <<"EOSQL";
 CREATE TABLE
     Physical (
-        physname    VARCHAR PRIMARY KEY,
+        physname    VARCHAR NOT NULL PRIMARY KEY,
         datapath    VARCHAR
     )
 EOSQL
@@ -1517,7 +1517,7 @@ EOSQL
     $sql = <<"EOSQL";
 CREATE TABLE
     NameLookup (
-        offset      INTEGER,
+        offset      INTEGER PRIMARY KEY,
         name        VARCHAR
     )
 EOSQL
