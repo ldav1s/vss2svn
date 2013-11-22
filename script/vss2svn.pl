@@ -848,6 +848,7 @@ sub GitReadImage {
     # at the time of this writing.
     my @shares = ();
     my $repo_re = qr/^\Q$gCfg{repo}\E./; # XXX not portable
+    my @appdir = ('$GIT_DIR', File::Spec->updir());
     foreach my $key (keys %git_image) {
         if (ref($git_image{$key})) {
             my $ary = $git_image{$key};
@@ -856,23 +857,18 @@ sub GitReadImage {
 
             if (scalar @$ary > 0) {
                 my @basedir = File::Spec->splitdir($base);
-
-                unshift @basedir, File::Spec->updir();
-                unshift @basedir, '$GIT_DIR';
+                @basedir = (@appdir, @basedir);
 
                 my $basepath = File::Spec->catfile(@basedir);
 
-                push @shares, "#";
-                push @shares, "# $base";
-                push @shares, "#";
+                push @shares, "#", "# $base", "#";
 
                 # synthesize the hard link
                 # XXX This could be a shell quoting nightmare...
                 foreach my $e (@$ary) {
                     $e =~ s/$repo_re//;
                     my @edir = File::Spec->splitdir($e);
-                    unshift @edir, File::Spec->updir();
-                    unshift @edir, '$GIT_DIR';
+                    @edir = (@appdir, @edir);
 
                     my $linkpath = File::Spec->catfile(@edir);
                     my $link = 'ln -f "' . $basepath . '"  "' . $linkpath . '"';
