@@ -40,6 +40,8 @@ use constant {
     TASK_FIXUPPARENT => 'FIXUPPARENT',
     TASK_TESTGITAUTHORINFO => 'TESTGITAUTHORINFO',
     TASK_GITREAD => 'GITREAD',
+    TASK_GITLABEL => 'GITLABEL',
+    TASK_CLEANUP => 'CLEANUP',
     TASK_DONE => 'DONE',
 };
 
@@ -158,10 +160,21 @@ my @joblist =
          task => TASK_FIXUPPARENT,
          handler => \&FixupParentActions,
      },
-     # Initialize the git repo and a few in memory structures
+     # Read in the master branch for git converting the history
+     # into the master branch.
      {
          task => TASK_GITREAD,
          handler => \&GitReadImage,
+     },
+     # Replay the labels
+     {
+         task => TASK_GITLABEL,
+         handler => \&ReplayLabels,
+     },
+     # Clean up
+     {
+         task => TASK_CLEANUP,
+         handler => \&Cleanup,
      },
      # done state
      {
@@ -897,8 +910,134 @@ EOT
         chmod 0755, $file;
     }
 
+    1;
+}
+
+###############################################################################
+#  ReplayLabels
+###############################################################################
+sub ReplayLabels {
+    # Read the labels, checking out the particular bookmark for a label.
+
+    my($sth, $tth, $rows);
+    my ($last_time);
+
+
+    my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
+    $repo->setlog($gCfg{debug});
+
+    $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
+                   . 'SELECT * FROM PhysicalActionLabel ORDER BY schedule_id');
+
+    ($last_time) = $gCfg{dbh}->selectrow_array('SELECT timestamp '
+                                               . 'FROM PhysicalActionSchedule '
+                                               . 'WHERE schedule_id = '
+                                               . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
+
+    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
+
+    $tth = $gCfg{dbh}->prepare("SELECT MIN(timestamp) "
+                               . "FROM PhysicalAction "
+                               . "WHERE timestamp > ? "
+                               . "AND actiontype = '@{[ACTION_LABEL]}'");
+
+    my $dump_cnt = 0;
+    while (defined $last_time && $last_time < $gCfg{maxtime}) {
+        my ($username, $comment);
+
+        print "timestamp label: $last_time\n";
+
+        # These have been scheduled already, no need to go through
+        # that code again, just get a changeset
+        $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
+                       . 'SELECT * FROM PhysicalActionChangeset');
+        $gCfg{dbh}->do('DELETE FROM PhysicalActionChangeset');
+
+        ($last_time) = $gCfg{dbh}->selectrow_array('SELECT timestamp '
+                                                   . 'FROM PhysicalActionSchedule '
+                                                   . 'WHERE schedule_id = '
+                                                   . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
+
+        &GetOneChangeset($last_time);
+
+        $sth->execute();
+        $rows = $sth->fetchall_arrayref( {} );
+
+        undef $username;
+
+        # It's not an error to have 0 scheduled rows
+
+        foreach my $row (@$rows) {
+            $last_time = $row->{timestamp};
+            $username = $row->{author};
+            $comment = $row->{comment};
+
+            my ($path, $parentpath);
+
+#            if ($dump_cnt % 100 == 0) {
+#                print "git_image: " . Dumper(\%git_image) . "\n";
+#                if ($dump_cnt == 100) {
+#                    exit(0);
+#                }
+#            }
+            ++$dump_cnt;
+
+            if (defined $row->{parentphys}) {
+                print "label parentphys: " . $row->{parentphys} .
+                    " physname: " . $row->{physname} .
+                    " timestamp: " .  $row->{timestamp} . "\n";
+                $parentpath = $git_image{$row->{parentphys}};
+                $path = ($row->{itemtype} == VSS_PROJECT)
+                    ? File::Spec->catdir($parentpath, $row->{itemname})
+                    : File::Spec->catfile($parentpath, $row->{itemname});
+            } else {
+                # presumably this is a child entry
+                # pick a path to update
+                if (defined $row->{physname}
+                    && defined $git_image{$row->{physname}}) {
+                    $path = @{$git_image{$row->{physname}}}[0];
+                    $parentpath = dirname($path);
+                }
+            }
+
+            &GitLabel($row, $repo, $path);
+        }
+
+        if (defined $username) {
+            &GitCommit($repo, $comment, $username, $last_time);
+            ++$gCfg{commit};
+        }
+
+        # get the next changeset
+        if ($last_time < $gCfg{maxtime}) {
+            ++$gCfg{changeset};
+            $tth->execute($last_time);
+            $last_time = $tth->fetchall_arrayref()->[0][0];
+        }
+
+        # Retire old data
+        $gCfg{dbh}->do("INSERT INTO PhysicalActionRetired "
+                       ."SELECT NULL AS retired_id, "
+                       . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * FROM PhysicalActionSchedule "
+                       . "ORDER BY schedule_id");
+        $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
+    }
+
+
+    1;
+}
+
+###############################################################################
+#  Cleanup
+###############################################################################
+sub Cleanup {
+    # cleanup files
+
     # snap the links
     rmtree($gCfg{links});
+
+    # delete deleted files
+    rmtree($gCfg{deleted});
 
     1;
 }
@@ -1581,6 +1720,33 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
+    # The PhysicalActionLabel table stores PhysicalActionSchedule
+    # label actions which must be deferred until after the master
+    # branch is built, because not doing so breaks the model for shared
+    # files.
+    $sql = <<"EOSQL";
+CREATE TABLE
+    PhysicalActionLabel (
+        schedule_id INTEGER PRIMARY KEY,
+        action_id   INTEGER NOT NULL,
+        $pa_sql
+    )
+EOSQL
+
+    $gCfg{dbh}->do($sql);
+
+    # The LabelBookmark table stores the HEAD commit for PhysicalActionLabel
+    $sql = <<"EOSQL";
+CREATE TABLE
+    LabelBookmark (
+        label_id   INTEGER PRIMARY KEY,
+        schedule_id INTEGER NOT NULL REFERENCES PhysicalActionLabel (schedule_id),
+        head_id TEXT NOT NULL
+    )
+EOSQL
+
+    $gCfg{dbh}->do($sql);
+
     # The PhysicalActionRetired table archives PhysicalActionSchedule items
     # that have been run (e.g. done something to the repository).
     $sql = <<"EOSQL";
@@ -1976,7 +2142,8 @@ sub SchedulePhysicalActions {
         # need to reset time, since there may be two commits in the same timestamp
         ($timestamp) = $gCfg{dbh}->selectrow_array('SELECT timestamp '
                                                    . 'FROM PhysicalActionSchedule '
-                                                   . 'WHERE schedule_id = (SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
+                                                   . 'WHERE schedule_id = '
+                                                   . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
     }
 
     # This slides the window down.
@@ -2676,7 +2843,7 @@ sub UpdateGitRepository {
                     &GitRecover($repo, $row, $path, $git_image, $simulated);
                 }
                 when (ACTION_LABEL) {
-                    &GitLabel($row, $repo, $path, $simulated);
+                    &DeferLabel($row, $repo, $simulated);
                 }
             }
         }
@@ -2891,7 +3058,7 @@ sub UpdateGitRepository {
                     }
                 }
                 when (ACTION_LABEL) {
-                    &GitLabel($row, $repo, $path, $simulated);
+                    &DeferLabel($row, $repo, $simulated);
                 }
             }
         }
@@ -3021,53 +3188,79 @@ sub GitCommit {
                         GIT_AUTHOR_DATE => POSIX::strftime(ISO8601_FMT, localtime($timestamp)),
                     }
                 });
+}
 
-    my $branch = $repo->logrun( 'symbolic-ref' => '-q', '--short', 'HEAD');
+# defer labeling until git master is complete
+sub DeferLabel {
+    my($row, $repo, $simulated) = @_;
 
-    if ($branch !~ $master_re) {
-        # back to master
-        $repo->logrun(checkout => '-q', 'master');
+    if (!$simulated) {
+        my @pa_ary;
+        foreach my $param (@physical_action_params) {
+            push @pa_ary, keys %$param;
+        }
+        my $pa_params_sql = join q{,}, @pa_ary;
+
+        # Copy it to the label table and remove it from the schedule
+        my $sth = $gCfg{dbh}->prepare("INSERT INTO PhysicalActionLabel "
+                                      . "SELECT NULL AS schedule_id, action_id, $pa_params_sql "
+                                      . "FROM PhysicalActionSchedule "
+                                      . "WHERE schedule_id = ?");
+        $sth->execute($row->{schedule_id});
+        my $sid = $gCfg{dbh}->last_insert_id("","","","");
+        $sth = $gCfg{dbh}->prepare('DELETE FROM PhysicalActionSchedule WHERE schedule_id = ?');
+        $sth->execute($row->{schedule_id});
+
+        # bookmark HEAD and associate it with the label
+        my $head_id = $repo->logrun('rev-parse' => 'HEAD');
+        $sth = $gCfg{dbh}->prepare('INSERT INTO LabelBookmark (label_id, schedule_id, head_id) '
+                                   .'VALUES (NULL, ?, ?)');
+        $sth->execute($sid, $head_id);
     }
 }
 
 # create or checkout a branch for a label and add files to it from master
 sub GitLabel {
-    my($row, $repo, $path, $simulated) = @_;
+    my($row, $repo, $path) = @_;
 
-    if (!$simulated) {
-        my $branch = $repo->logrun('symbolic-ref' => '-q', '--short', 'HEAD');
-        my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
+    my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
 
-        # "git checkout master" is hampered by absolute paths in this case
-        # so we just strip off the repo dir
-        my @tagnamedir = File::Spec->splitdir($path);
-        my @repodir = File::Spec->splitdir($gCfg{repo});
+    # "git checkout <branch>" is hampered by absolute paths in this case
+    # so we just strip off the repo dir
+    my @tagnamedir = File::Spec->splitdir($path);
+    my @repodir = File::Spec->splitdir($gCfg{repo});
 
-        @tagnamedir = @tagnamedir[($#repodir+1)..$#tagnamedir];
-        my $tmppath;
-        if ($row->{itemtype} == VSS_FILE) {
-            $tmppath = File::Spec->catfile(@tagnamedir);
-        } else {
-            $tmppath = File::Spec->catdir(@tagnamedir);
-        }
-
-        if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
-            # create a new branch for this label
-            # undef labels are not recorded in label map
-            $repo->logrun(checkout => '-q', '--orphan',  $tagname);
-            $repo->logrun(config => "branch." . $tagname . ".description",  $row->{comment}); # give it a description
-            $repo->logrun(reset => '--hard'); # unmark all the "new" files from the commit.
-            if (defined $row->{label} && $row->{label} ne '') {
-                $label_map->{$row->{label}} = $tagname;
-                print "Label `" . $row->{label} . "' is branch `$tagname'.\n";
-            } else {
-                print "undef label is branch `$tagname' at timestamp $row->{timestamp}.\n";
-            }
-        } elsif ($branch =~ $master_re) {
-            $repo->logrun(checkout => '-q', $tagname);
-        }
-        $repo->logrun(checkout => '-q', 'master', '--',  $tmppath);
+    @tagnamedir = @tagnamedir[(scalar @repodir)..$#tagnamedir];
+    my $tmppath;
+    if ($row->{itemtype} == VSS_FILE) {
+        $tmppath = File::Spec->catfile(@tagnamedir);
+    } else {
+        $tmppath = File::Spec->catdir(@tagnamedir);
     }
+
+    if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
+        # create a new branch for this label
+        # invalid labels are not recorded in label map
+        $repo->logrun(checkout => '-q', '--orphan',  $tagname);
+        if (defined $row->{comment} && $row->{comment} ne '') {
+            $repo->logrun(config => "branch." . $tagname . ".description",  $row->{comment}); # give it a description
+        }
+        $repo->logrun(reset => '--hard'); # unmark all the "new" files from the commit.
+        if (!invalid_branch_name($row->{label})) {
+            $label_map->{$row->{label}} = $tagname;
+            print "Label `" . $row->{label} . "' is branch `$tagname'.\n";
+        } else {
+            print "undef label is branch `$tagname' at timestamp $row->{timestamp}.\n";
+        }
+    } else {
+        $repo->logrun(checkout => '-q', $tagname);
+    }
+
+    # checkout from the HEAD we bookmarked
+    my ($head_id) = $gCfg{dbh}->selectrow_array('SELECT head_id FROM LabelBookmark '
+                                                . 'WHERE schedule_id = ?', undef, $row->{schedule_id});
+
+    $repo->logrun(checkout => '-q', $head_id, '--',  $tmppath);
 }
 
 # handle different kinds of moves
@@ -3138,8 +3331,10 @@ sub GitRecover {
                         my $delete_loc = File::Spec->catdir($gCfg{deleted}, $action_id_del);
                         if (!move($delete_loc, $path)) {
                             print "GitRecover: move project delete loc: `$delete_loc' path: `$path' $!\n";
+                        } else {
+                            $repo->logrun(add => '--',  $path);
+                            $git_image->{$row->{physname}} = $path;
                         }
-                        $git_image->{$row->{physname}} = $path;
                     }
                 } else {
                     # XXX don't know what to do here
