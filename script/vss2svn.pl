@@ -1504,6 +1504,8 @@ sub SetupGlobals {
 sub InitSysTables {
     my($sql);
 
+    # The Physical table tracks the VSS database units (physname)
+    # and where they are on the filesystem (datapath)
     $sql = <<"EOSQL";
 CREATE TABLE
     Physical (
@@ -1514,6 +1516,7 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
+    # NameLookup contains VSS name mappings for better filenames
     $sql = <<"EOSQL";
 CREATE TABLE
     NameLookup (
@@ -1524,6 +1527,11 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
+    # The PhysicalAction table is the raw output of the entire
+    # VSS database with a few fixups.  It's basically a collection
+    # of the actions that happened to all files and projects.
+    # There's also some scheduling info (priority, parentdata)
+    # that is emitted as this table is constructed.
     my @pa_ary;
     foreach my $param (@physical_action_params) {
         my($field, $type);
@@ -1543,6 +1551,14 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
+    # The PhysicalActionSchedule table starts out as a timeslice of
+    # ($gCfg{revtimerange} s) the PhysicalAction table.  There's
+    # basically two things that happen when data is in here:
+    # -- The exact ordering of operations in the timeslice is fixed,
+    #    (e.g. directories exist when files are added to them) since
+    #    the ordering from the VSS database isn't exact enough.
+    # -- Exactly one git changeset is synthesized from this ordering.
+    #    Any additional changesets are stored in PhysicalActionChangeset.
     $sql = <<"EOSQL";
 CREATE TABLE
     PhysicalActionSchedule (
@@ -1554,6 +1570,10 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
+    # PhysicalActionChangeset is a stoarge place for extra changesets
+    # in the timeslice.  These deferred items are reloaded into
+    # PhysicalActionSchedule after the git commit happens, so that
+    # git changesets can be synthesized from them.
     $sql = <<"EOSQL";
 CREATE TABLE
     PhysicalActionChangeset (
@@ -1565,6 +1585,8 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
+    # The PhysicalActionRetired table archives PhysicalActionSchedule items
+    # that have been run (e.g. done something to the repository).
     $sql = <<"EOSQL";
 CREATE TABLE
     PhysicalActionRetired (
@@ -1580,6 +1602,8 @@ EOSQL
     $gCfg{dbh}->do($sql);
 
 
+    # The PhysicalActionDiscarded table archives PhysicalActionSchedule items
+    # that have not been run, are not planned to be run.
     $sql = <<"EOSQL";
 CREATE TABLE
     PhysicalActionDiscarded (
