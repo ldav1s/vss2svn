@@ -115,7 +115,7 @@ tie %{$label_map}, 'Hash::Case::Preserve';
 my $author_map = ();
 
 # The main VSS activity is put into git master, and labels into their own branch
-my $master_re = qr/master/;
+my $master_re = qr/^master$/i;
 
 # store a hash of actions to take; allows restarting in case of failed
 # migration
@@ -2911,6 +2911,12 @@ sub UpdateGitRepository {
 
 }
 
+sub invalid_branch_name {
+    my($dlabel) = @_;
+
+    return (!defined $dlabel || $dlabel eq '' || $dlabel =~ $master_re);
+}
+
 # create a valid ref name for labeling
 sub get_valid_ref_name {
     my($dlabel, $timestamp) = @_;
@@ -2946,7 +2952,7 @@ sub get_valid_ref_name {
 
     my $tagname;
 
-    if (!defined $dlabel || $dlabel eq '') {
+    if (invalid_branch_name($dlabel)) {
         $dlabel = "@{[PROGNAME]}-$timestamp"; # better than nothing, I suppose
         goto GENSYM;
     } else {
