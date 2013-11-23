@@ -1019,7 +1019,7 @@ sub ReplayLabels {
 
             $uth->execute($row->{schedule_id});
 
-            my ($head_id, $giti) = $uth->fetchall_arrayref()->[0];
+            my ($head_id, $giti) = $uth->fetchrow_array();
             $giti = thaw($giti);
 
             if (defined $row->{parentphys}) {
