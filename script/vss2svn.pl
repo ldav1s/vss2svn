@@ -201,6 +201,15 @@ my @physical_action_params = (
     { 'comment' =>     'TEXT' },
     );
 
+# Data for SystemInfo table
+my @system_info_params = (
+    { 'task' =>    'VARCHAR' },
+    { 'step' =>    'VARCHAR' },
+    { 'ssphys' =>  'VARCHAR' },
+    { 'tempdir' => 'VARCHAR' },
+    { 'starttime' => 'VARCHAR' },
+    );
+
 &Initialize;
 &ConnectDatabase;
 
@@ -1815,10 +1824,14 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
-    my @cfgitems = qw(task step ssphys tempdir starttime);
-
-    my $fielddef = join(",\n        ",
-                        map {sprintf('%-12.12s VARCHAR', $_)} @cfgitems);
+    my @cfgitems;
+    foreach my $param (@system_info_params) {
+        my($field, $type);
+        while (($field, $type) = each %$param) {
+            push @cfgitems, "$field $type";
+        }
+    }
+    my $fielddef = join(', ', @cfgitems);
 
     $sql = <<"EOSQL";
 CREATE TABLE
@@ -1829,8 +1842,13 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
+    @cfgitems = ();
+    foreach my $param (@system_info_params) {
+        push @cfgitems, keys %$param;
+    }
+
     my $fields = join(', ', @cfgitems);
-    my $args = join(', ', map {"'" . $_  . "'"} @cfgitems);
+    my $args = join(', ', ('NULL') x (scalar @cfgitems));
 
     $sql = <<"EOSQL";
 INSERT INTO
@@ -1847,27 +1865,32 @@ EOSQL
 #  ReloadSysTables
 ###############################################################################
 sub ReloadSysTables {
-    my($sql, $sth, $sthup, $row, $field, $val);
 
-    $sql = "SELECT * FROM SystemInfo";
-
-    $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute();
-
-    $row = $sth->fetchrow_hashref();
-
-FIELD:
-    while (($field, $val) = each %$row) {
-        if (defined($gCfg{$field})) { # allow user to override saved vals
-            $sql = "UPDATE SystemInfo SET $field = ?";
-            $sthup = $gCfg{dbh}->prepare($sql);
-            $sthup->execute($gCfg{$field});
-        } else {
-            $gCfg{$field} = $val;
-        }
+    my @cfgitems;
+    foreach my $param (@system_info_params) {
+        push @cfgitems, keys %$param;
     }
 
-    $sth->finish();
+    my $row = $gCfg{dbh}->selectall_hashref('SELECT * FROM SystemInfo', \@cfgitems);
+    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+    eval {
+        my($field, $val);
+        while (($field, $val) = each %$row) {
+            if (defined($gCfg{$field})) { # allow user to override saved vals
+                $gCfg{dbh}->do("UPDATE SystemInfo SET $field = '$gCfg{$field}'");
+            } else {
+                $gCfg{$field} = $val;
+            }
+        }
+    };
+    if ($@) {
+        warn "Transaction aborted because $@";
+        eval { $gCfg{dbh}->rollback };
+        die "Failed to reload sys tables";
+    } else {
+        $gCfg{dbh}->commit;
+    }
+
     &SetSystemTask($gCfg{task});
 
 }  #  End ReloadSysTables
