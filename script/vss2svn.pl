@@ -24,7 +24,7 @@ use IPC::Run qw( run );
 use Time::CTime;
 use Benchmark ':hireswallclock';
 use Fcntl ':mode';
-use Storable qw(dclone);
+use Storable qw(dclone freeze thaw);
 
 use lib '.';
 use POSIX;
@@ -919,7 +919,7 @@ EOT
 sub ReplayLabels {
     # Read the labels, checking out the particular bookmark for a label.
 
-    my($sth, $tth, $rows);
+    my($sth, $tth, $uth, $rows);
     my ($last_time);
 
 
@@ -940,6 +940,8 @@ sub ReplayLabels {
                                . "FROM PhysicalAction "
                                . "WHERE timestamp > ? "
                                . "AND actiontype = '@{[ACTION_LABEL]}'");
+
+    $uth = $gCfg{dbh}->prepare('SELECT head_id, git_image FROM LabelBookmark WHERE schedule_id = ?');
 
     my $dump_cnt = 0;
     while (defined $last_time && $last_time < $gCfg{maxtime}) {
@@ -974,33 +976,35 @@ sub ReplayLabels {
 
             my ($path, $parentpath);
 
-#            if ($dump_cnt % 100 == 0) {
-#                print "git_image: " . Dumper(\%git_image) . "\n";
-#                if ($dump_cnt == 100) {
-#                    exit(0);
-#                }
-#            }
             ++$dump_cnt;
+
+            $uth->execute($row->{schedule_id});
+
+            my ($head_id, $giti) = $uth->fetchall_arrayref()->[0];
+            $giti = thaw($giti);
 
             if (defined $row->{parentphys}) {
                 print "label parentphys: " . $row->{parentphys} .
                     " physname: " . $row->{physname} .
                     " timestamp: " .  $row->{timestamp} . "\n";
-                $parentpath = $git_image{$row->{parentphys}};
+                $parentpath = $giti->{$row->{parentphys}};
                 $path = ($row->{itemtype} == VSS_PROJECT)
                     ? File::Spec->catdir($parentpath, $row->{itemname})
                     : File::Spec->catfile($parentpath, $row->{itemname});
+                # wrap path in array
+                my @p = ("$path");
+                $path = \@p;
             } else {
                 # presumably this is a child entry
                 # pick a path to update
                 if (defined $row->{physname}
-                    && defined $git_image{$row->{physname}}) {
-                    $path = @{$git_image{$row->{physname}}}[0];
-                    $parentpath = dirname($path);
+                    && defined $giti->{$row->{physname}}) {
+                    # no such thing as a unique "path" with shares
+                    $path = $giti->{$row->{physname}};
                 }
             }
 
-            &GitLabel($row, $repo, $path);
+            &GitLabel($row, $repo, $head_id, $path);
         }
 
         if (defined $username) {
@@ -1736,12 +1740,14 @@ EOSQL
     $gCfg{dbh}->do($sql);
 
     # The LabelBookmark table stores the HEAD commit for PhysicalActionLabel
+    # as well as the git image at the time of the label.
     $sql = <<"EOSQL";
 CREATE TABLE
     LabelBookmark (
         label_id   INTEGER PRIMARY KEY,
         schedule_id INTEGER NOT NULL REFERENCES PhysicalActionLabel (schedule_id),
-        head_id TEXT NOT NULL
+        head_id TEXT NOT NULL,
+        git_image TEXT NOT NULL
     )
 EOSQL
 
@@ -3213,30 +3219,18 @@ sub DeferLabel {
 
         # bookmark HEAD and associate it with the label
         my $head_id = $repo->logrun('rev-parse' => 'HEAD');
-        $sth = $gCfg{dbh}->prepare('INSERT INTO LabelBookmark (label_id, schedule_id, head_id) '
-                                   .'VALUES (NULL, ?, ?)');
-        $sth->execute($sid, $head_id);
+        my $giti = freeze \%git_image;
+        $sth = $gCfg{dbh}->prepare('INSERT INTO LabelBookmark (label_id, schedule_id, head_id, git_image) '
+                                   .'VALUES (NULL, ?, ?, ?)');
+        $sth->execute($sid, $head_id, $giti);
     }
 }
 
 # create or checkout a branch for a label and add files to it from master
 sub GitLabel {
-    my($row, $repo, $path) = @_;
+    my($row, $repo, $head_id, $paths) = @_;
 
     my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
-
-    # "git checkout <branch>" is hampered by absolute paths in this case
-    # so we just strip off the repo dir
-    my @tagnamedir = File::Spec->splitdir($path);
-    my @repodir = File::Spec->splitdir($gCfg{repo});
-
-    @tagnamedir = @tagnamedir[(scalar @repodir)..$#tagnamedir];
-    my $tmppath;
-    if ($row->{itemtype} == VSS_FILE) {
-        $tmppath = File::Spec->catfile(@tagnamedir);
-    } else {
-        $tmppath = File::Spec->catdir(@tagnamedir);
-    }
 
     if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
         # create a new branch for this label
@@ -3256,11 +3250,23 @@ sub GitLabel {
         $repo->logrun(checkout => '-q', $tagname);
     }
 
-    # checkout from the HEAD we bookmarked
-    my ($head_id) = $gCfg{dbh}->selectrow_array('SELECT head_id FROM LabelBookmark '
-                                                . 'WHERE schedule_id = ?', undef, $row->{schedule_id});
+    # copy each path into the label
+    foreach my $path (@$paths) {
+        # "git checkout <branch>" is hampered by absolute paths in this case
+        # so we just strip off the repo dir
+        my @tagnamedir = File::Spec->splitdir($path);
+        my @repodir = File::Spec->splitdir($gCfg{repo});
 
-    $repo->logrun(checkout => '-q', $head_id, '--',  $tmppath);
+        @tagnamedir = @tagnamedir[(scalar @repodir)..$#tagnamedir];
+        my $tmppath;
+        if ($row->{itemtype} == VSS_FILE) {
+            $tmppath = File::Spec->catfile(@tagnamedir);
+        } else {
+            $tmppath = File::Spec->catdir(@tagnamedir);
+        }
+
+        $repo->logrun(checkout => '-q', $head_id, '--',  $tmppath);
+    }
 }
 
 # handle different kinds of moves
