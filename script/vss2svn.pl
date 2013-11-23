@@ -957,7 +957,6 @@ sub ReplayLabels {
 
     $uth = $gCfg{dbh}->prepare('SELECT head_id, git_image FROM LabelBookmark WHERE schedule_id = ?');
 
-    my $dump_cnt = 0;
     my $first_label = 0;
     while (defined $last_time && $last_time < $gCfg{maxtime}) {
         my ($username, $comment);
@@ -986,12 +985,35 @@ sub ReplayLabels {
 
         # It's not an error to have 0 scheduled rows
 
+        my $dump_cnt = 0;
         foreach my $row (@$rows) {
             $last_time = $row->{timestamp};
             $username = $row->{author};
             $comment = $row->{comment};
 
             my ($path, $parentpath);
+
+            if ($dump_cnt == 0) {
+                my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
+
+                if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
+                    # create a new branch for this label
+                    # invalid labels are not recorded in label map
+                    $repo->logrun(checkout => '-q', '--orphan',  $tagname);
+                    if (defined $row->{comment} && $row->{comment} ne '') {
+                        $repo->logrun(config => "branch." . $tagname . ".description",  $row->{comment}); # give it a description
+                    }
+                    $repo->logrun(reset => '--hard'); # unmark all the "new" files from the commit.
+                    if (!invalid_branch_name($row->{label})) {
+                        $label_map->{$row->{label}} = $tagname;
+                        print "Label `" . $row->{label} . "' is branch `$tagname'.\n";
+                    } else {
+                        print "undef label is branch `$tagname' at timestamp $row->{timestamp}.\n";
+                    }
+                } else {
+                    $repo->logrun(checkout => '-q', $tagname);
+                }
+            }
 
             ++$dump_cnt;
 
@@ -3264,24 +3286,6 @@ sub GitLabel {
     my($row, $repo, $head_id, $paths) = @_;
 
     my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
-
-    if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
-        # create a new branch for this label
-        # invalid labels are not recorded in label map
-        $repo->logrun(checkout => '-q', '--orphan',  $tagname);
-        if (defined $row->{comment} && $row->{comment} ne '') {
-            $repo->logrun(config => "branch." . $tagname . ".description",  $row->{comment}); # give it a description
-        }
-        $repo->logrun(reset => '--hard'); # unmark all the "new" files from the commit.
-        if (!invalid_branch_name($row->{label})) {
-            $label_map->{$row->{label}} = $tagname;
-            print "Label `" . $row->{label} . "' is branch `$tagname'.\n";
-        } else {
-            print "undef label is branch `$tagname' at timestamp $row->{timestamp}.\n";
-        }
-    } else {
-        $repo->logrun(checkout => '-q', $tagname);
-    }
 
     # copy each path into the label
     foreach my $path (@$paths) {
