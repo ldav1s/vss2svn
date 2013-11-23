@@ -926,6 +926,11 @@ sub ReplayLabels {
     my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
     $repo->setlog($gCfg{debug});
 
+    if ($gCfg{resume}) {
+        &TimestampLimits;
+    }
+
+    $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule'); # for resume
     $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
                    . 'SELECT * FROM PhysicalActionLabel ORDER BY schedule_id');
 
@@ -944,16 +949,19 @@ sub ReplayLabels {
     $uth = $gCfg{dbh}->prepare('SELECT head_id, git_image FROM LabelBookmark WHERE schedule_id = ?');
 
     my $dump_cnt = 0;
+    my $first_label = 0;
     while (defined $last_time && $last_time < $gCfg{maxtime}) {
         my ($username, $comment);
 
         print "timestamp label: $last_time\n";
 
-        # These have been scheduled already, no need to go through
-        # that code again, just get a changeset
-        $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
-                       . 'SELECT * FROM PhysicalActionChangeset');
-        $gCfg{dbh}->do('DELETE FROM PhysicalActionChangeset');
+        if ($first_label != 0) {
+            # These have been scheduled already, no need to go through
+            # that code again, just get a changeset
+            $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
+                           . 'SELECT * FROM PhysicalActionChangeset');
+            $gCfg{dbh}->do('DELETE FROM PhysicalActionChangeset');
+        }
 
         ($last_time) = $gCfg{dbh}->selectrow_array('SELECT timestamp '
                                                    . 'FROM PhysicalActionSchedule '
@@ -1025,6 +1033,8 @@ sub ReplayLabels {
                        . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * FROM PhysicalActionSchedule "
                        . "ORDER BY schedule_id");
         $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
+
+        ++$first_label;
     }
 
 
