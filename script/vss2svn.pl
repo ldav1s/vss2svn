@@ -63,7 +63,6 @@ use constant {
     VSSDB_ROOT => 'AAAAAAAA',
     ISO8601_FMT => '%Y-%m-%dT%H:%M:%S',
     MINMAX_TIME_FMT => '%Y-%m-%d',
-    PA_PRIORITY_MAX => 5,
     # This is arbitrary, tried to keep it fairly small
     PAIR_INSERT_VAL => 256,
     # This is arbitrary, tried to keep it fairly small
@@ -72,6 +71,16 @@ use constant {
     PA_PARAMS_LIMIT => 16,
     # This is arbitrary, tried to keep it really small
     TIMESTAMP_DELTA => 4,
+};
+
+# values for prioritizing actions within a timestamp
+use constant {
+    PA_PRIORITY_MAX => 1, # highest priority
+    PA_PRIORITY_ADD => 1,
+    PA_PRIORITY_SHARE => 2,
+    PA_PRIORITY_PIN => 2,
+    PA_PRIORITY_BRANCH => 3,
+    PA_PRIORITY_MIN => 5, # minimum priority
 };
 
 # actions used in actiontype database column
@@ -574,7 +583,6 @@ VERSION:
         $is_binary = 0;
         $info = undef;
         $parentdata = 0;
-        $priority = PA_PRIORITY_MAX;
         $label = undef;
 
         if ($version->exists('Comment')) {
@@ -665,10 +673,13 @@ VERSION:
         $info = $version->findvalue('Action/UnpinnedFromVersion') if ($version->exists('Action/UnpinnedFromVersion'));
 
         for ($actiontype) {
-            when (ACTION_ADD) { $priority -= 4; }
-            when (ACTION_SHARE) { $priority -= 3; }
-            when (ACTION_PIN) { $priority -= 3; }
-            when (ACTION_BRANCH) { $priority -= 2; }
+            when (ACTION_ADD) { $priority = PA_PRIORITY_ADD; }
+            when (ACTION_SHARE) { $priority = PA_PRIORITY_SHARE; }
+            when (ACTION_PIN) { $priority = PA_PRIORITY_PIN; }
+            when (ACTION_BRANCH) { $priority = PA_PRIORITY_BRANCH; }
+            default {
+                $priority = PA_PRIORITY_MIN;
+            }
         }
 
 
@@ -693,7 +704,7 @@ VERSION:
                 $labelComment = "assigned label '$vlabel' to version $vernum of physical file '$tphysname'";
             }
             push @pa_list, $tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
-            $itemtype, $timestamp, $user, $is_binary, $info, PA_PRIORITY_MAX,
+            $itemtype, $timestamp, $user, $is_binary, $info, PA_PRIORITY_MIN,
             $parentdata, $vlabel, $labelComment;
         }
 
