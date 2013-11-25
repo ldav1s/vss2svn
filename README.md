@@ -16,8 +16,8 @@ on the PhysicalAction stage.  I still probably need to review the
 original scheduler to see if I can improve mine.  It still does need
 improvement.
 
-Data checks and manipulation are much more SQL intensive now.  I would
-like to move to a current version of SQLite.
+Data checks and manipulation are much more SQL intensive now.  I've
+moved to a more recent version of SQLite as well (SQLite 3).
 
 Also, I've moved to perl 5.10.1 at least for the time being.  The
 newer version has a few features that made the switch worthwhile.
@@ -32,9 +32,11 @@ to emulate "shares".
 
 Caveats:
 
-Migration should be performed on a case-insensitive filesystem that is
-able to support hard links, such as JFS, ZFS or NTFS.
+Migration should be performed on a case-insensitive, case-preserving
+filesystem that is able to support hard links, such as JFS, ZFS or NTFS.
 [ciopfs](http://www.brain-dump.org/projects/ciopfs) might work as
 well, but seemed slow when I tried it in comparison with JFS.
 Labels will be treated case-insensitively as well, since they will be
-stored in the git repository that way.
+stored in the git repository that way.  You might be able to use a
+standard case-sensitive filesystem (e.g. ext4), but I have not tried
+it.  It could work.
