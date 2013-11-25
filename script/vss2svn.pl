@@ -1255,7 +1255,7 @@ sub CheckForDestroy {
                       . "'$physname'; it was possibly corrupted or was not in place before "
                       . "the last GETPHYSHIST task was run.");
 
-        $physpath = "$exportdir/$physname.$version";
+        $physpath = File::Spec->catfile($exportdir, "$physname.$version");
         if (! -e $physpath) {
             if (!copy("$gCfg{indeterminateFile}", $physpath)) {
                 print "CheckForDestroy: indeterminate copy $!\n";
@@ -1263,7 +1263,7 @@ sub CheckForDestroy {
         }
     } else {
         # It was DESTROYed or DELETEd
-        $physpath = "$exportdir/$physname.$version";
+        $physpath = File::Spec->catfile($exportdir, "$physname.$version");
         if (! -e $physpath) {
             if (defined $row && defined $row->[0]) {
                 if (!copy("$gCfg{destroyedFile}", $physpath)) {
