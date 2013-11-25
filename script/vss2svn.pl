@@ -24,7 +24,7 @@ use IPC::Run qw( run );
 use Time::CTime;
 use Benchmark ':hireswallclock';
 use Fcntl ':mode';
-use Storable qw(dclone freeze thaw);
+use Storable qw(dclone nfreeze thaw);
 
 use lib '.';
 use POSIX;
@@ -3283,7 +3283,7 @@ sub DeferLabel {
 
         # bookmark HEAD and associate it with the label
         my $head_id = $repo->logrun('rev-parse' => 'HEAD');
-        my $giti = freeze \%git_image;
+        my $giti = nfreeze \%git_image;
         $sth = $gCfg{dbh}->prepare('INSERT INTO LabelBookmark (label_id, schedule_id, head_id, git_image) '
                                    .'VALUES (NULL, ?, ?, ?)');
         $sth->execute($sid, $head_id, $giti);
