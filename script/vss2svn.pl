@@ -855,12 +855,11 @@ sub GitReadImage {
 
         if (defined $username) {
             &GitCommit($repo, $comment, $username, $last_time);
-            ++$gCfg{commit};
+            ++$gCfg{commit_id};
         }
 
         # get the next changeset
         if ($last_time < $gCfg{maxtime}) {
-            ++$gCfg{changeset};
             $tth->execute($last_time);
             $last_time = $tth->fetchall_arrayref()->[0][0];
 
@@ -869,7 +868,7 @@ sub GitReadImage {
         # Retire old data
         $gCfg{dbh}->do("INSERT INTO PhysicalActionRetired "
                        ."SELECT NULL AS retired_id, "
-                       . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * FROM PhysicalActionSchedule "
+                       . "$gCfg{commit_id} AS commit_id, * FROM PhysicalActionSchedule "
                        . "ORDER BY schedule_id");
         $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
     }
@@ -1062,12 +1061,11 @@ sub ReplayLabels {
 
         if (defined $username) {
             &GitCommit($repo, $comment, $username, $last_time);
-            ++$gCfg{commit};
+            ++$gCfg{commit_id};
         }
 
         # get the next changeset
         if ($last_time < $gCfg{maxtime}) {
-            ++$gCfg{changeset};
             $tth->execute($last_time);
             $last_time = $tth->fetchall_arrayref()->[0][0];
         }
@@ -1075,7 +1073,7 @@ sub ReplayLabels {
         # Retire old data
         $gCfg{dbh}->do("INSERT INTO PhysicalActionRetired "
                        ."SELECT NULL AS retired_id, "
-                       . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * FROM PhysicalActionSchedule "
+                       . "$gCfg{commit_id} AS commit_id, * FROM PhysicalActionSchedule "
                        . "ORDER BY schedule_id");
         $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
 
@@ -1477,7 +1475,7 @@ sub GetStats {
         $_ = POSIX::strftime(MINMAX_TIME_FMT, localtime($_));
     }
 
-    return($actions, $discarded, $gCfg{commit}-1, $mintime, $maxtime);
+    return($actions, $discarded, $gCfg{commit_id}-1, $mintime, $maxtime);
 
 }  #  End GetStats
 
@@ -1815,7 +1813,6 @@ CREATE TABLE
     PhysicalActionRetired (
         retired_id INTEGER PRIMARY KEY,
         commit_id INTEGER NOT NULL,
-        changeset INTEGER NOT NULL,
         schedule_id INTEGER NOT NULL,
         action_id   INTEGER NOT NULL,
         $pa_sql
@@ -1832,7 +1829,6 @@ CREATE TABLE
     PhysicalActionDiscarded (
         discarded_id INTEGER PRIMARY KEY,
         commit_id INTEGER NOT NULL,
-        changeset INTEGER NOT NULL,
         schedule_id INTEGER NOT NULL,
         action_id   INTEGER NOT NULL,
         $pa_sql
@@ -2046,8 +2042,7 @@ sub Initialize {
     $gCfg{deletedFile} = File::Spec->catfile($gCfg{tempdir},'deleted.txt');
     $gCfg{indeterminateFile} = File::Spec->catfile($gCfg{tempdir},'indeterminate.txt');
 
-    $gCfg{commit} = 1;
-    $gCfg{changeset} = 1;
+    $gCfg{commit_id} = 1;
 
     ### Don't go past here if resuming a previous run ###
     if ($gCfg{resume}) {
@@ -2266,7 +2261,7 @@ sub ScheduleRevTime {
             ++$index;
             $gCfg{dbh}->do("INSERT INTO PhysicalActionDiscarded "
                            . "SELECT NULL AS discarded_id, "
-                           . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * "
+                           . "$gCfg{commit_id} AS commit_id, * "
                            . "FROM PhysicalActionSchedule WHERE schedule_id = $row->{schedule_id} "
                            . "ORDER BY schedule_id");
             $gCfg{dbh}->do("DELETE FROM PhysicalActionSchedule WHERE schedule_id = $row->{schedule_id}");
@@ -2330,7 +2325,7 @@ sub ScheduleRevTime {
                         if (scalar @$max_sched == 1) {
                             $gCfg{dbh}->do("INSERT INTO PhysicalActionDiscarded "
                                            . "SELECT NULL AS discarded_id, "
-                                           . "$gCfg{commit} AS commit_id, $gCfg{changeset} AS changeset, * "
+                                           . "$gCfg{commit_id} AS commit_id, * "
                                            . "FROM tmp ORDER by schedule_id");
                             $gCfg{dbh}->do('DROP TABLE tmp');
                             ++$startover_count;
