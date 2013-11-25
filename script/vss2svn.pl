@@ -31,6 +31,7 @@ use POSIX;
 use Git::Repository qw( +Vss2Svn2Git::GitLogger );
 use Data::Dumper;
 
+# task names for conversion states
 use constant {
     TASK_INIT => 'INIT',
     TASK_LOADVSSNAMES => 'LOADVSSNAMES',
@@ -45,6 +46,7 @@ use constant {
     TASK_DONE => 'DONE',
 };
 
+# other constants
 use constant {
     TEMPDIR => '_vss2svn',
     REPO => 'repo',
@@ -72,6 +74,7 @@ use constant {
     TIMESTAMP_DELTA => 4,
 };
 
+# actions used in actiontype database column
 use constant {
     ACTION_ADD => 'ADD',
     ACTION_RESTOREDPROJECT => 'RESTOREDPROJECT',
