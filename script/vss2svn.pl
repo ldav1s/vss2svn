@@ -1976,6 +1976,9 @@ sub Initialize {
 
     if (! -d $gCfg{repo}) {
         mkdir($gCfg{repo});
+    }
+
+    if (! -d File::Spec->catdir($gCfg{repo}, '.git')) {
         Git::Repository->run( init => $gCfg{repo} );
     }
 
