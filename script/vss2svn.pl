@@ -42,6 +42,7 @@ use constant {
     TASK_TESTGITAUTHORINFO => 'TESTGITAUTHORINFO',
     TASK_GITREAD => 'GITREAD',
     TASK_GITLABEL => 'GITLABEL',
+    TASK_GITDESTROY => 'GITDESTROY',
     TASK_CLEANUP => 'CLEANUP',
     TASK_DONE => 'DONE',
 };
@@ -182,6 +183,11 @@ my @joblist =
      {
          task => TASK_GITLABEL,
          handler => \&ReplayLabels,
+     },
+     # Destroy destroyed
+     {
+         task => TASK_GITDESTROY,
+         handler => \&FilterDestroyedFiles,
      },
      # Clean up
      {
@@ -1080,6 +1086,28 @@ sub ReplayLabels {
         ++$first_label;
     }
 
+
+    1;
+}
+
+###############################################################################
+#  FilterDestroyedFiles
+###############################################################################
+sub FilterDestroyedFiles {
+    # strip out destroyed files that exist in history
+
+    my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
+    $repo->setlog($gCfg{debug});
+
+    my $destroyed_hash = $repo->logrun('hash-object' => '--',  abs_path($gCfg{destroyedFile}));
+
+    $repo->logrun('filter-branch' => '--prune-empty', '-f', '--index-filter',
+                  "git ls-tree -r \$GIT_COMMIT "
+                  . " | awk -F\"\\t\" '/$destroyed_hash/ {print \$2;}' "
+                  . " | xargs -r -I foo git update-index --force-remove -- foo",
+                  '--',
+                  '--all' # all branches
+        );
 
     1;
 }
