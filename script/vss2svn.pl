@@ -1524,9 +1524,6 @@ sub DoSsCmd {
 
     $gSysOut =~ s/\x00//g; # remove null bytes
     $gSysOut =~ s/.\x08//g; # yes, I've seen VSS store backspaces in names!
-    # allow all characters in the windows-1252 codepage: see http://de.wikipedia.org/wiki/Windows-1252
-    $gSysOut =~ s/[\x00-\x09\x11\x12\x14-\x1F\x81\x8D\x8F\x90\x9D]/_/g; # just to be sure
-
 }  #  End DoSsCmd
 
 ###############################################################################
