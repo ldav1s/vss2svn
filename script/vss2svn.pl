@@ -121,13 +121,12 @@ my %git_image = ();
 # unique name will be generated for it (and not added here).  If the label is
 # defined but the branch name algorithm fails to generate a "fixed up" version
 # it will also be given a generated name and stored here.
-# N.B. This must be case insensitive also since git will be storing them that way
-# on a case-insensitive filesystem.
-my $label_map = ();
+# N.B. This must be case insensitive since VSS treats labels case insenstively
+my $label_map = {};
 tie %{$label_map}, 'Hash::Case::Preserve';
 
 # The author map maps VSS author information to git author information
-my $author_map = ();
+my $author_map = {};
 
 # The main VSS activity is put into git master, and labels into their own branch
 my $master_re = qr/^master$/i;
