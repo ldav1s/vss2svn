@@ -1123,6 +1123,12 @@ sub Cleanup {
     # delete deleted files
     rmtree($gCfg{deleted});
 
+    # checkout git master so we are in a nice state
+    my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
+    $repo->setlog($gCfg{debug});
+
+    $repo->logrun(checkout => '-q', 'master');
+
     1;
 }
 
