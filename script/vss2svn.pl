@@ -184,6 +184,8 @@ my @joblist =
          handler => \&ReplayLabels,
      },
      # Destroy destroyed
+     # TODO: find a way to do this on the data side _before_
+     # conversion, rather than _after_.
      {
          task => TASK_GITDESTROY,
          handler => \&FilterDestroyedFiles,
