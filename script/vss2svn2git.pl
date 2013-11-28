@@ -1284,43 +1284,31 @@ sub CheckForDestroy {
 
     # physical file doesn't exist; it must have been destroyed earlier
     # search and see if it was DESTROYed first
-    $row = $gCfg{dbh}->selectrow_arrayref("SELECT action_id FROM PhysicalAction "
-                                          . "WHERE physname = ? AND "
-                                          . "actiontype = '@{[ACTION_DESTROY]}'",
-                                          undef, $physname);
+    ($row) = $gCfg{dbh}->selectrow_array("SELECT action_id FROM PhysicalAction "
+                                         . "WHERE physname = ? AND "
+                                         . "actiontype = '@{[ACTION_DESTROY]}'",
+                                         undef, $physname);
 
     if (!$destroyonly) {
-        $rowd = $gCfg{dbh}->selectrow_arrayref("SELECT action_id FROM PhysicalAction "
-                                               . "WHERE physname = ? AND "
-                                               . "actiontype = '@{[ACTION_DELETE]}'",
-                                               undef, $physname);
+        ($rowd) = $gCfg{dbh}->selectrow_array("SELECT action_id FROM PhysicalAction "
+                                              . "WHERE physname = ? AND "
+                                              . "actiontype = '@{[ACTION_DELETE]}'",
+                                              undef, $physname);
     }
 
-    if (!(defined $row && defined $row->[0]) && !(defined $rowd && defined $rowd->[0])) {
+    my $ftc = $row // $rowd;
+    $ftc = (defined $ftc) ? ($ftc == $row ? $gCfg{destroyedFile} : $gCfg{deletedFile} ) : $gCfg{indeterminateFile};
+
+    if ($ftc eq $gCfg{indeterminateFile}) {
         # we have no idea if it was DESTROYed or DELETEd
         &ThrowWarning("Can't retrieve revisions from physical file "
                       . "'$physname'; it was possibly corrupted or was not in place before "
                       . "the last GETPHYSHIST task was run.");
-
-        $physpath = File::Spec->catfile($exportdir, "$physname.$version");
-        if (! -e $physpath) {
-            if (!copy("$gCfg{indeterminateFile}", $physpath)) {
-                print "CheckForDestroy: indeterminate copy $!\n";
-            }
-        }
-    } else {
-        # It was DESTROYed or DELETEd
-        $physpath = File::Spec->catfile($exportdir, "$physname.$version");
-        if (! -e $physpath) {
-            if (defined $row && defined $row->[0]) {
-                if (!copy("$gCfg{destroyedFile}", $physpath)) {
-                    print "CheckForDestroy: destroyed copy $!\n";
-                }
-            } elsif (defined $rowd && defined $rowd->[0]) {
-                if (!copy("$gCfg{deletedFile}", $physpath)) {
-                    print "CheckForDestroy: deleted copy $!\n";
-                }
-            }
+    }
+    $physpath = File::Spec->catfile($exportdir, "$physname.$version");
+    if (! -e $physpath) {
+        if (!copy($ftc, $physpath)) {
+            warn "CheckForDestroy: file: `$ftc', copy $!";
         }
     }
     return $physpath;
