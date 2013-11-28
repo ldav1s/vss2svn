@@ -16,7 +16,6 @@ Module::Build->new
 	  'File::Path' => 0,
 	  'Git::Repository' => '>= 1.27',
 	  'Time::CTime' => 0,
-          'Git' => 0,
           'Hash::Case' => 0,
           'File::Spec' => 0,
           'IPC::Run' => 0,
