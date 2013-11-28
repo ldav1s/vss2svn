@@ -2031,8 +2031,6 @@ sub Initialize {
 
     $gCfg{sqlitedb} = File::Spec->catfile($gCfg{tempdir}, 'vss_data.db');
 
-    # XML output from ssphysout placed here.
-    $gCfg{ssphysout} = File::Spec->catfile($gCfg{tempdir}, 'ssphysout');
     $gCfg{encoding} = ENCODING if !defined($gCfg{encoding});
 
     # All sorts of working data placed here
