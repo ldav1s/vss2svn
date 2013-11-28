@@ -2146,17 +2146,19 @@ REQUIRED PARAMETERS:
 
 OPTIONAL PARAMETERS:
     --ssphys <path>   : Full path to @{[SSPHYS]} program; uses PATH otherwise
-    --tempdir <dir>   : Temp directory to use during conversion;
-                        default is '@{[TEMPDIR]}'
-    --repo <directory> : specify the git repo to use;
-                         default is '@{[REPO]}'.  It is assumed that it has been
-                         initialized with 'git init' and contains appropriate
-                         settings files (e.g, .gitignore, .gitattributes, etc.).
-                         If not specified, a directory is created and initialized.
+    --tempdir <dir>   : Work directory to use during conversion;
+                        default is '@{[TEMPDIR]}'.  Must be on the same filesystem
+                        as --repo.
+    --repo <directory> : specify the git repository to use;
+                         default is '@{[REPO]}'.  If it does not exist, it
+                         will be created.  If it is not initalized, it will be initialized.
+                         It may be previously initialized with 'git init'
+                         and contain appropriate settings files
+                         (e.g, .gitignore, .gitattributes, etc.) for the migration.
+                         Must be on the same filesystem as --tempdir.
     --revtimerange <sec> : specify the maximum time difference (in seconds)
                            between two VSS actions that are treated as one git commit;
-                           default is @{[REVTIMERANGE]} seconds (== 1hour).
-                           Must be > 0.
+                           default is @{[REVTIMERANGE]} seconds.  Must be > 0.
 
     --resume          : Resume a failed or aborted previous run
     --task <task>     : specify the task to resume; task is one of the following
