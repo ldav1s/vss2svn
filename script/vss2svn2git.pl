@@ -49,6 +49,7 @@ use constant {
 
 # other constants
 use constant {
+    SSPHYS => 'ssphys',
     TEMPDIR => '_vss2svn2git',
     REPO => 'repo',
     REVTIMERANGE => 3600,
@@ -1406,8 +1407,8 @@ git repo     : $gCfg{repo}
 VSS Encoding : $gCfg{encoding}
 
 @{[PROGNAME]} ver  : $VERSION
-SSPHYS exe   : $gCfg{ssphys}
-SSPHYS ver   : $ssversion
+@{[SSPHYS]} exe   : $gCfg{ssphys}
+@{[SSPHYS]} ver   : $ssversion
 XML Parser   : $gCfg{xmlParser}
 Task         : $gCfg{task}
 Rev Time     : $gCfg{revtimerange}
@@ -1417,7 +1418,7 @@ EOTXT
     my @version = split '\.', $ssversion;
     # we need at least ssphys 0.22
     if ($version[0] == 0 && $version[1] < 22) {
-        &ThrowError("The conversion needs at least ssphys version 0.22");
+        &ThrowError("The conversion needs at least @{[SSPHYS]} version 0.22");
     }
 
 }  #  End ShowHeader
@@ -1720,7 +1721,7 @@ sub SetupGlobals {
         &ReloadSysTables;
     }
 
-    $gCfg{ssphys} = 'ssphys' if !defined($gCfg{ssphys});
+    $gCfg{ssphys} = SSPHYS if !defined($gCfg{ssphys});
 
 }  #  End SetupGlobals
 
@@ -2096,7 +2097,7 @@ sub Initialize {
 
     &WriteDestroyedPlaceholderFiles();
 
-    $gCfg{ssphys} ||= 'ssphys';
+    $gCfg{ssphys} ||= SSPHYS;
 
     $gCfg{task} = TASK_INIT;
     $gCfg{step} = 0;
@@ -2147,7 +2148,7 @@ REQUIRED PARAMETERS:
                              where <username> is a VSS username
 
 OPTIONAL PARAMETERS:
-    --ssphys <path>   : Full path to ssphys.exe program; uses PATH otherwise
+    --ssphys <path>   : Full path to @{[SSPHYS]} program; uses PATH otherwise
     --tempdir <dir>   : Temp directory to use during conversion;
                         default is '@{[TEMPDIR]}'
     --repo <directory> : specify the git repo to use;
