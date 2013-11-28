@@ -1139,6 +1139,7 @@ sub Cleanup {
 # remove temporary checkins that where create to detect MS VSS capabilities
 ###############################################################################
 sub RemoveTemporaryCheckIns {
+    # more info at "Elimination of ~SAK Files" : <http://msdn.microsoft.com/en-us/library/bb165458(v=vs.80).aspx>
     my $sql = <<"EOSQL";
 DELETE FROM PhysicalAction WHERE action_id IN
 (SELECT action_id
@@ -1148,7 +1149,8 @@ DELETE FROM PhysicalAction WHERE action_id IN
   FROM PhysicalAction
   WHERE actiontype = '@{[ACTION_ADD]}'
   AND itemtype = @{[VSS_FILE]}
-  AND comment = 'Temporary file created by Visual Studio .NET to detect Microsoft Visual SourceSafe capabilities.'))
+  AND itemname LIKE '~sak%'
+  AND comment LIKE 'Temporary file created by Visual Studio%'))
 EOSQL
 
     $gCfg{dbh}->do($sql);
