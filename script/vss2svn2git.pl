@@ -2905,7 +2905,7 @@ sub UpdateGitRepository {
                     } elsif (! -d $path) {
                         make_path($path);
                         if (!copy($gCfg{keepFile}, $path)) {
-                            print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_PROJECT]} copy $!\n";
+                            warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_PROJECT]} copy $!";
                         } else {
                             $git_image->{$row->{physname}} = $path;
                             $repo->logrun(add => '--',  $path);
@@ -2977,7 +2977,7 @@ sub UpdateGitRepository {
                                                                               undef, $row->{physname});
                                 if (!copy((($action_id) ? $gCfg{destroyedFile} : $gCfg{indeterminateFile}),
                                           $link_file)) {  # touch the file
-                                    print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                                    warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!";
                                 }
                             }
                             link $link_file, $path;
@@ -2997,7 +2997,7 @@ sub UpdateGitRepository {
                             # copy the data to the link
                             if (!$simulated) {
                                 if (!copy($efile, $link_file)) {
-                                    print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!\n";
+                                    warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
                                 } else {
                                     $repo->logrun(add => '--',  $path);
                                     &RemoveKeep($repo, $parentpath);
@@ -3016,7 +3016,7 @@ sub UpdateGitRepository {
                             # copy the data to the link
                             if (!$simulated) {
                                 if (!copy($efile, $link_file)) {
-                                    print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' link path `$link_file' copy $!\n";
+                                    warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' link path `$link_file' copy $!";
                                 }
                             }
                         }
@@ -3079,7 +3079,7 @@ sub UpdateGitRepository {
 
                         if (!$simulated) {
                             if (!copy($newver, $link_file)) {
-                                print "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} newver `$newver' path `$link_file' copy $!\n";
+                                warn "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} newver `$newver' path `$link_file' copy $!";
                             } else {
                                 $repo->logrun(add => '--',  $path);
                             }
@@ -3112,7 +3112,7 @@ sub UpdateGitRepository {
                             my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
                             my $p = ((-f $link_info) ? $link_info : $path);
                             if (!copy($p, $link_file)) { # should create new file
-                                print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$p' link `$link_file' copy $!\n";
+                                warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$p' link `$link_file' copy $!";
                             } else {
                                 unlink $path; # decrement any link count
                                 link $link_file, $path; # add $path as the new link
@@ -3134,7 +3134,7 @@ sub UpdateGitRepository {
                         my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
                         if (!$simulated) {
                             if (!copy($link_info, $link_file)) { # should create new file
-                                print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} info `$link_info' link `$link_file' copy $!\n";
+                                warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} info `$link_info' link `$link_file' copy $!";
                             }
                         }
                     }
@@ -3153,7 +3153,7 @@ sub UpdateGitRepository {
                         $link_file .= $row->{version};
                         if (defined $efile && !$simulated && ! -f $link_file) {
                             if (!copy($efile, $link_file)) {
-                                print "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!\n";
+                                warn "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
                             }
                         }
                     }
@@ -3173,10 +3173,10 @@ sub UpdateGitRepository {
     };
 
     if ($@) {
-        print "An error ($@) occurred\n";
-        print "git_image: " . Dumper(\%git_image) . "\n";
-        print "row: " . Dumper($row) . "\n";
-        exit(1);
+        say "An error ($@) occurred";
+        say "git_image: " . Dumper(\%git_image);
+        say "row: " . Dumper($row);
+        die "can't finish reading actions";
     }
 
 }
@@ -3419,7 +3419,7 @@ sub GitRecover {
                     if (defined $action_id_del) {
                         my $delete_loc = File::Spec->catdir($gCfg{deleted}, $action_id_del);
                         if (!move($delete_loc, $path)) {
-                            print "GitRecover: move project delete loc: `$delete_loc' path: `$path' $!\n";
+                            warn "GitRecover: move project delete loc: `$delete_loc' path: `$path' $!";
                         } else {
                             $repo->logrun(add => '--',  $path);
                             $git_image->{$row->{physname}} = $path;
@@ -3436,7 +3436,7 @@ sub GitRecover {
                     if (defined $action_id_del) {
                         my $delete_loc = File::Spec->catfile($gCfg{deleted}, $action_id_del);
                         if (!move($delete_loc, $path)) {
-                            print "GitRecover: move file delete loc: `$delete_loc' path: `$path' $!\n";
+                            warn "GitRecover: move file delete loc: `$delete_loc' path: `$path' $!";
                         } else {
                             @{$git_image->{$row->{physname}}} = ("$path");
                         }
@@ -3448,7 +3448,7 @@ sub GitRecover {
                     } else {
                         # no history backup, fake it
                         if (!copy($gCfg{destroyedFile}, $link_file)) {  # touch the file
-                            print "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!\n";
+                            warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!";
                         } else {
                             link $link_file, $path;
                         }
@@ -3469,7 +3469,7 @@ sub GitRm {
     # inode bookkeeping
     my $keepfile = File::Spec->catfile($parentpath, KEEP_FILE);
     if (!copy($gCfg{keepFile}, $keepfile)) {
-        print "GitRm: path `$keepfile' copy $!\n";
+        warn "GitRm: path `$keepfile' copy $!";
     }
 
     if ($actiontype eq ACTION_DELETE) {
@@ -3481,7 +3481,7 @@ sub GitRm {
             $delete_loc = File::Spec->catfile($gCfg{deleted}, $action_id);
         }
         if (!move($path, $delete_loc)) {
-            print "GitRm: move path: `$path' delete loc: `$delete_loc' $!\n";
+            warn "GitRm: move path: `$path' delete loc: `$delete_loc' $!";
         }
     }
 
