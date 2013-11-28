@@ -49,7 +49,7 @@ use constant {
 
 # other constants
 use constant {
-    TEMPDIR => '_vss2svn',
+    TEMPDIR => '_vss2svn2git',
     REPO => 'repo',
     REVTIMERANGE => 3600,
     ENCODING => 'windows-1252',
@@ -1396,7 +1396,7 @@ sub ShowHeader {
     my $ssversion = &GetSsVersion();
 
     print <<"EOTXT";
-======== VSS2SVN ========
+======== @{[PROGNAME]} ========
 $info
 Start Time   : $starttime
 
@@ -1405,7 +1405,7 @@ Temp Dir     : $gCfg{tempdir}
 git repo     : $gCfg{repo}
 VSS Encoding : $gCfg{encoding}
 
-VSS2SVN ver  : $VERSION
+@{[PROGNAME]} ver  : $VERSION
 SSPHYS exe   : $gCfg{ssphys}
 SSPHYS ver   : $ssversion
 XML Parser   : $gCfg{xmlParser}
@@ -2138,7 +2138,7 @@ sub GiveHelp {
 
 $msg
 
-USAGE: perl vss2svn.pl --vssdir <dir> --author_info <file> [options]
+USAGE: perl @{[PROGNAME]}.pl --vssdir <dir> --author_info <file> [options]
 
 REQUIRED PARAMETERS:
     --vssdir <dir>  : Directory where VSS database is located. This should be

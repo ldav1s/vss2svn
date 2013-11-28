@@ -1,10 +1,10 @@
 use Module::Build;
 
 Module::Build->new
-    ( dist_name => 'Vss2Svn',
-      dist_version_from => 'script/vss2svn.pl',
+    ( dist_name => 'Vss2Svn2Git',
+      dist_version_from => 'script/vss2svn2git.pl',
       configure_requires => {'Module::Build' => 0.38},
-      dist_abstract => 'converts SourceSafe database to subversion repository',
+      dist_abstract => 'converts SourceSafe database to git repository',
       license => 'gpl',
       requires => {
 	  'Getopt::Long' => '>= 2.34',
@@ -21,7 +21,7 @@ Module::Build->new
           'IPC::Run' => 0,
           'Data::Dumper' => 0,
       },
-      script_files => { 'script/vss2svn.pl' => 'script/vss2svn.pl', 'ssphys/ssphys' => 'bin/ssphys'},
+      script_files => { 'script/vss2svn2git.pl' => 'script/vss2svn2git.pl', 'ssphys/ssphys' => 'bin/ssphys'},
       pm_files => { 'script/Vss2Svn2Git/GitLogger.pm' => 'lib/Vss2Svn2Git/GitLogger.pm' },
       PL_files => { 'ssphys/ssphys.PL' => 'bin/ssphys' },
       )->create_build_script;
