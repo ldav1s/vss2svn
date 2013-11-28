@@ -1322,38 +1322,20 @@ sub ExportVssPhysFile {
     my($row, $physpath);
 
     $physname =~ m/^(..)/;
+    $version = $version // 1;
 
     my $exportdir = File::Spec->catdir($gCfg{vssdata}, $1);
 
     make_path($exportdir) if ! -e $exportdir;
-    $row = $gCfg{dbh}->selectrow_arrayref("SELECT datapath FROM Physical WHERE physname = ?", undef, $physname);
+    ($row) = $gCfg{dbh}->selectrow_array("SELECT datapath FROM Physical WHERE physname = ?", undef, $physname);
 
-    if (!(defined $row && defined $row->[0])) {
-        if (! defined $version) {
-            $version = 1;
-        }
-        $physpath = &CheckForDestroy($exportdir, $physname, $version, 1);
-    } else {
-        $physpath = $row->[0];
-    }
+    $physpath = $row // &CheckForDestroy($exportdir, $physname, $version, 1);
 
     if (! -f $physpath) {
         # physical file doesn't exist; it must have been destroyed later since find was run
         &ThrowWarning("Can't retrieve revisions from VSS database file "
                       . "'$physpath'; it was destroyed after the last GETPHYSHIST task was run.");
         return undef;
-    }
-
-    # MergeParentData normally will merge two corresponding item and parent
-    # actions. But if the actions are more appart than the maximum allowed
-    # timespan, we will end up with an undefined version in an ADD action here
-    # As a hot fix, we define the version to 1, which will also revert to the
-    # alpha 1 version behavoir.
-    if (! defined $version) {
-        &ThrowWarning("'$physname': no version specified for retrieval");
-
-        # fall through and try with version 1.
-        $version = 1;
     }
 
     my $exportfile = File::Spec->catfile($exportdir, "$physname.$version");
@@ -1706,7 +1688,7 @@ sub SetupGlobals {
         &ReloadSysTables;
     }
 
-    $gCfg{ssphys} = SSPHYS if !defined($gCfg{ssphys});
+    $gCfg{ssphys} = $gCfg{ssphys} // SSPHYS;
 
 }  #  End SetupGlobals
 
@@ -1959,8 +1941,8 @@ sub Initialize {
 
     &GiveHelp("Must specify --vssdir") if !defined($gCfg{vssdir});
     &GiveHelp("Must specify --author_info") if !defined($gCfg{author_info});
-    $gCfg{tempdir} = TEMPDIR if !defined($gCfg{tempdir});
-    $gCfg{repo} = REPO if !defined($gCfg{repo});
+    $gCfg{tempdir} = $gCfg{tempdir} // TEMPDIR;
+    $gCfg{repo} = $gCfg{repo} // REPO;
     $gCfg{repo} = abs_path($gCfg{repo});
     $gCfg{vssdir} = abs_path($gCfg{vssdir});
     $gCfg{vssdatadir} = File::Spec->catdir($gCfg{vssdir}, 'data');
@@ -2017,7 +1999,7 @@ sub Initialize {
 
     $gCfg{sqlitedb} = File::Spec->catfile($gCfg{tempdir}, 'vss_data.db');
 
-    $gCfg{encoding} = ENCODING if !defined($gCfg{encoding});
+    $gCfg{encoding} = $gCfg{encoding} // ENCODING;
 
     # All sorts of working data placed here
     mkdir $gCfg{tempdir} unless (-d $gCfg{tempdir});
