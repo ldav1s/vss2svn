@@ -2627,6 +2627,14 @@ sub UpdateRowAffinity {
     }
  }
 
+sub GetOneChangesetLog {
+    my($msg, $schedule_id, $dbgsql) = @_;
+    my $desc = $schedule_id // 'undef';
+
+    my ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
+    say "$msg $desc rows: $dbgcnt";
+}
+
 ###############################################################################
 #  GetOneChangeset
 ###############################################################################
@@ -2655,7 +2663,7 @@ sub GetOneChangeset {
 
     if ($gCfg{debug}) {
         ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
-        print "scheduling timestamp $timestamp with $dbgcnt rows\n";
+        say "scheduling timestamp $timestamp with $dbgcnt rows";
     }
 
     # Any leftovers are moved to PhysicalActionChangeset
@@ -2678,15 +2686,7 @@ sub GetOneChangeset {
         $dsth->execute($schedule_id);
     }
 
-    if ($gCfg{debug}) {
-        ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
-        my $msg = "scheduling author ";
-        if ($schedule_id) {
-            print "$msg $schedule_id rows: $dbgcnt\n";
-        } else {
-            print "$msg undef rows: $dbgcnt\n";
-        }
-    }
+    &GetOneChangesetLog("scheduling author ", $schedule_id, $dbgsql) if $gCfg{debug};
 
     # dump all entries incuding and after the first mismatch of comments
     # N.B. comments may be NULL
@@ -2706,15 +2706,7 @@ sub GetOneChangeset {
         $dsth->execute($schedule_id);
     }
 
-    if ($gCfg{debug}) {
-        ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
-        my $msg = "scheduling comment ";
-        if ($schedule_id) {
-            print "$msg $schedule_id rows: $dbgcnt\n";
-        } else {
-            print "$msg undef rows: $dbgcnt\n";
-        }
-    }
+    &GetOneChangesetLog("scheduling comment ", $schedule_id, $dbgsql) if $gCfg{debug};
 
     # Label filter part 1
     # When the first item on the schedule is (or is not) a LABEL, remove the first
@@ -2734,15 +2726,7 @@ sub GetOneChangeset {
         $dsth->execute($schedule_id);
     }
 
-    if ($gCfg{debug}) {
-        ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
-        my $msg = "scheduling label pre ";
-        if ($schedule_id) {
-            print "$msg $schedule_id rows: $dbgcnt\n";
-        } else {
-            print "$msg undef rows: $dbgcnt\n";
-        }
-    }
+    &GetOneChangesetLog("scheduling label pre ", $schedule_id, $dbgsql) if $gCfg{debug};
 
     # dump all entries incuding and after the first mismatch of labels
     # N.B. labels may be NULL
@@ -2766,15 +2750,7 @@ sub GetOneChangeset {
         $dsth->execute($schedule_id);
     }
 
-    if ($gCfg{debug}) {
-        ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
-        my $msg = "scheduling label ";
-        if ($schedule_id) {
-            print "$msg $schedule_id rows: $dbgcnt\n";
-        } else {
-            print "$msg undef rows: $dbgcnt\n";
-        }
-    }
+    &GetOneChangesetLog("scheduling label ", $schedule_id, $dbgsql) if $gCfg{debug};
 
     # * most directory actions
     # If the topmost scheduled action is one of the actions in the set
@@ -2795,15 +2771,7 @@ sub GetOneChangeset {
         $dsth->execute($schedule_id);
     }
 
-    if ($gCfg{debug}) {
-        ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
-        my $msg = "scheduling dir actions ";
-        if ($schedule_id) {
-            print "$msg $schedule_id rows: $dbgcnt\n";
-        } else {
-            print "$msg undef rows: $dbgcnt\n";
-        }
-    }
+    &GetOneChangesetLog("scheduling dir actions ", $schedule_id, $dbgsql) if $gCfg{debug};
 
     # * same file touched more than once
     # SHARE and BRANCH are pretty benign, other actions potentially
@@ -2835,15 +2803,7 @@ sub GetOneChangeset {
         $dsth->execute($schedule_id);
     }
 
-    if ($gCfg{debug}) {
-        ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
-        my $msg = "scheduling same file touched ";
-        if ($schedule_id) {
-            print "$msg $schedule_id rows: $dbgcnt\n";
-        } else {
-            print "$msg undef rows: $dbgcnt\n";
-        }
-    }
+    &GetOneChangesetLog("scheduling same file touched ", $schedule_id, $dbgsql) if $gCfg{debug};
 }
 
 # update the image name mapping when files/directories are moved
