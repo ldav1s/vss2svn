@@ -261,12 +261,12 @@ sub RunConversion {
     for ($i = $taskmap->{$gCfg{task}}; $i < (scalar @joblist)-1; ++$i) {
         $info = $joblist[$i];
 
-        print "TASK: $gCfg{task}: "
-            . POSIX::strftime(ISO8601_FMT . "\n", localtime) . "\n";
+        say "TASK: $gCfg{task}: "
+            . POSIX::strftime(ISO8601_FMT . "\n", localtime);
         push @{ $gCfg{tasks} }, $gCfg{task};
 
         if ($gCfg{prompt}) {
-            print "Press ENTER to continue...\n";
+            say "Press ENTER to continue...";
             my $temp = <STDIN>;
             die if $temp =~ m/^quit/i;
         }
@@ -380,7 +380,7 @@ sub FindPhysDbFiles {
             &LoadUpPhysical(\@phys_list);
             @phys_list = ();
         }
-        print "Found $vssdb_cnt VSS database files at '$gCfg{vssdatadir}'\n" if $gCfg{verbose};
+        say "Found $vssdb_cnt VSS database files at '$gCfg{vssdatadir}'" if $gCfg{verbose};
     };
 
     if ($@) {
@@ -446,7 +446,7 @@ sub GetPhysVssHistory {
 sub GetVssPhysInfo {
     my($datapath, $physname) = @_;
 
-    print "datapath: \"$datapath\"\n" if $gCfg{debug};
+    say "datapath: \"$datapath\"" if $gCfg{debug};
     my @cmd = ('info', "-e$gCfg{encoding}", "$datapath");
     &DoSsCmd(@cmd);
 
@@ -609,8 +609,8 @@ VERSION:
             # append the label comment to a possible version comment
             if (defined $lcom && $lcom ne '') {
                 if (defined $comment) {
-                    print "Merging LabelComment and Comment for "
-                        . "'$tphysname;$vernum'\n"; # if $gCfg{verbose};
+                    say "Merging LabelComment and Comment for "
+                        . "'$tphysname;$vernum'"; # if $gCfg{verbose};
                     $comment .= "\n";
                 }
                 $comment .= $lcom || undef;
@@ -755,8 +755,8 @@ sub GetItemName {
         && defined $namelookup->{$offset}
         && defined $namelookup->{$offset}->{name}) {
         my $newname = $namelookup->{$offset}->{name};
-        print "Changing name of '$itemname' to '$newname' from "
-            . "name cache\n" if $gCfg{debug};
+        say "Changing name of '$itemname' to '$newname' from "
+            . "name cache" if $gCfg{debug};
         $itemname = $newname;
     }
 
@@ -782,7 +782,7 @@ sub TestGitAuthorInfo {
 
     foreach my $row (@$rows) {
         ++$err;
-        print "Found unknown username `$row->{author}'.\n";
+        say "Found unknown username `$row->{author}'.";
     }
 
     die "author file '$gCfg{author_info}' is incomplete." if $err;
@@ -814,7 +814,7 @@ sub GitReadImage {
     while ($last_time < $gCfg{maxtime}) {
         my ($username, $comment);
 
-        print "timestamp: $last_time\n";
+        say "timestamp: $last_time" if $gCfg{verbose};
 
         &SchedulePhysicalActions($last_time);
 
@@ -833,7 +833,7 @@ sub GitReadImage {
             my ($path, $parentpath);
 
 #            if ($dump_cnt % 100 == 0) {
-#                print "git_image: " . Dumper(\%git_image) . "\n";
+#                say "git_image: " . Dumper(\%git_image) if $gCfg{debug};
 #                if ($dump_cnt == 100) {
 #                    exit(0);
 #                }
@@ -841,9 +841,9 @@ sub GitReadImage {
             ++$dump_cnt;
 
             if (defined $row->{parentphys}) {
-                print "parentphys: " . $row->{parentphys} .
-                    " physname: " . $row->{physname} .
-                    " timestamp: " .  $row->{timestamp} . "\n";
+                say "parentphys: $row->{parentphys} "
+                    . "physname: $row->{physname} "
+                    . "timestamp: $row->{timestamp}" if $gCfg{debug};
                 $parentpath = $git_image{$row->{parentphys}};
                 $path = ($row->{itemtype} == VSS_PROJECT)
                     ? File::Spec->catdir($parentpath, $row->{itemname})
@@ -982,7 +982,7 @@ sub ReplayLabels {
     while (defined $last_time && $last_time < $gCfg{maxtime}) {
         my ($username, $comment);
 
-        print "timestamp label: $last_time\n";
+        say "timestamp label: $last_time" if $gCfg{verbose};
 
         if ($first_label != 0) {
             # These have been scheduled already, no need to go through
@@ -1027,9 +1027,9 @@ sub ReplayLabels {
                     $repo->logrun(reset => '--hard'); # unmark all the "new" files from the commit.
                     if (!invalid_branch_name($row->{label})) {
                         $label_map->{$row->{label}} = $tagname;
-                        print "Label `" . $row->{label} . "' is branch `$tagname'.\n";
+                        say "Label `$row->{label}' is branch `$tagname'.";
                     } else {
-                        print "undef label is branch `$tagname' at timestamp $row->{timestamp}.\n";
+                        say "undef label is branch `$tagname' at timestamp $row->{timestamp}.";
                     }
                 } else {
                     $repo->logrun(checkout => '-q', $tagname);
@@ -1044,9 +1044,9 @@ sub ReplayLabels {
             $giti = thaw($giti);
 
             if (defined $row->{parentphys}) {
-                print "label parentphys: " . $row->{parentphys} .
-                    " physname: " . $row->{physname} .
-                    " timestamp: " .  $row->{timestamp} . "\n";
+                say "label parentphys: $row->{parentphys} "
+                    . "physname: $row->{physname} "
+                    . "timestamp: $row->{timestamp}" if $gCfg{debug};
                 $parentpath = $giti->{$row->{parentphys}};
                 $path = ($row->{itemtype} == VSS_PROJECT)
                     ? File::Spec->catdir($parentpath, $row->{itemname})
@@ -1381,8 +1381,6 @@ sub ExportVssPhysFile {
         }
     }
 
-    print "ExportVssPhysFile: $exportfile\n" if $gCfg{debug};
-
     return $exportfile;
 }  #  End ExportVssPhysFile
 
@@ -1537,7 +1535,7 @@ sub DoSysCmd {
 
     unshift @args, $gCfg{ssphys};
 
-    print join(" ", @args) .  "\n" if $gCfg{verbose};
+    say join(" ", @args) if $gCfg{verbose};
 
     run \@args, '>', \$gSysOut;
 
@@ -1628,7 +1626,7 @@ sub StopConversion {
 sub SetSystemTask {
     my($task, $leavestep) = @_;
 
-    print "\nSETTING TASK $task\n" if $gCfg{verbose};
+    say "\nSETTING TASK $task" if $gCfg{verbose};
 
     my($sql, $sth);
 
@@ -1659,7 +1657,7 @@ EOSQL
 sub SetSystemStep {
     my($step) = @_;
 
-    print "\nSETTING STEP $step\n" if $gCfg{verbose};
+    say "\nSETTING STEP $step" if $gCfg{verbose};
 
     my($sql, $sth);
 
@@ -2007,18 +2005,18 @@ sub Initialize {
             if (defined $username) {
                 if (!defined $author) {
                     ++$err;
-                    print "Undefined author for username `$username'\n";
+                    say "Undefined author for username `$username'";
                 } elsif (defined $author && $author eq '') {
                     ++$err;
-                    print "Empty author for username `$username'\n";
+                    say "Empty author for username `$username'";
                 }
 
                 if (!defined $author_email) {
                     ++$err;
-                    print "Undefined author email for username `$username'\n";
+                    say "Undefined author email for username `$username'";
                 } elsif (defined $author_email && $author_email eq '') {
                     ++$err;
-                    print "Empty author email for username `$username'\n";
+                    say "Empty author email for username `$username'";
                 }
             }
 
@@ -2257,7 +2255,7 @@ sub SchedulePhysicalActions {
     my $should_schedule = $sth->execute($timestamp, $timestamp+$gCfg{revtimerange});
 
     if (defined $should_schedule && $should_schedule > 0) {
-        print "timestamp range: $timestamp - " . ($timestamp+$gCfg{revtimerange}) . "\n";
+        say "timestamp range: $timestamp - " . ($timestamp+$gCfg{revtimerange}) if $gCfg{debug};
         &CheckAffinity();
         &ScheduleRevTime();
     }
@@ -2312,8 +2310,8 @@ sub ScheduleRevTime {
             if (!defined $giti->{$row->{parentphys}}) {
                 # we are out of schedule
 
-#                    print "out of order: parentphys " . $row->{parentphys} . " physname: " . $row->{physname} . "\n";
-#                    print "giti: " . Dumper($giti) . "\n";
+#                    say "out of order: parentphys " . $row->{parentphys} . " physname: " . $row->{physname} if $gCfg{debug};
+#                    say "giti: " . Dumper($giti) if $gCfg{debug};
 
                 if ($row->{actiontype} eq ACTION_ADD || $row->{actiontype} eq ACTION_SHARE) {
                     # we are added out of schedule
@@ -2325,7 +2323,7 @@ sub ScheduleRevTime {
 #                                               . 'ORDER BY schedule_id');
 #                    $tth->execute($row->{timestamp});
 #                    $ooo = $tth->fetchall_arrayref();
-#                    print "slice entries before: " . Dumper($ooo) . "\n";
+#                    say "slice entries before: " . Dumper($ooo) if $gCfg{debug};
 
                     # grab all the out of order entries
                     $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
@@ -2371,7 +2369,7 @@ sub ScheduleRevTime {
                         undef $max_sched;
                     }
 
-#                    print "max sched: $max_sched\n";
+#                    say "max sched: $max_sched" if $gCfg{debug};
 
                     $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
                                                . 'WHERE timestamp = ? AND schedule_id > ? '
@@ -2394,7 +2392,7 @@ sub ScheduleRevTime {
                     $tth->execute();
                     $ooo = $tth->fetchall_arrayref();
 
-#                    print "out of order: " . Dumper($ooo) . "\n";
+#                    say "out of order: " . Dumper($ooo) if $gCfg{debug};
 
                     # renumber the out of order entries
                     $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
@@ -2402,11 +2400,11 @@ sub ScheduleRevTime {
                         my $idx2 = 0;
                         foreach my $o (@$ooo_data) {
                             my $j = ($ooo_data->[0]{schedule_id}+$idx);
-                            print "out of order: $j $o->{schedule_id}\n" if $gCfg{debug};
+                            say "out of order: $j $o->{schedule_id}" if $gCfg{debug};
                             my $rv = $gCfg{dbh}->do("UPDATE tmp SET schedule_id=$j "
                                                     . "WHERE schedule_id = $o->{schedule_id} "
                                                     . "AND action_id = $o->{action_id}");
-#                        print "rv: $rv\n";
+#                        say "rv: $rv" if $gCfg{debug};
                             ++$idx;
                             ++$idx2;
                         }
@@ -2424,12 +2422,12 @@ sub ScheduleRevTime {
 #                                                  . 'ORDER BY schedule_id');
 #                    $tth->execute($row->{timestamp});
 #                    $ooo = $tth->fetchall_arrayref();
-#                    print "in order renumbered: " . Dumper($ooo) . "\n";
+#                    say "in order renumbered: " . Dumper($ooo) if $gCfg{debug};
 
 #                    $tth = $gCfg{dbh}->prepare('SELECT * FROM tmp');
 #                    $tth->execute();
 #                    $ooo = $tth->fetchall_arrayref();
-#                    print "out of order renumbered: " . Dumper($ooo) . "\n";
+#                    say "out of order renumbered: " . Dumper($ooo) if $gCfg{debug};
 
                     $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule SELECT * FROM tmp');
                     $gCfg{dbh}->do('DROP TABLE tmp');
@@ -2439,12 +2437,12 @@ sub ScheduleRevTime {
 #                                               . 'ORDER BY schedule_id');
 #                    $tth->execute($row->{timestamp});
 #                    $ooo = $tth->fetchall_arrayref();
-#                    print "slice entries after: " . Dumper($ooo) . "\n";
+#                    say "slice entries after: " . Dumper($ooo) if $gCfg{debug};
 
                     $rescheduled = 1;
                 }
                 if ($rescheduled) {
-#                    print "rescheduling " . $row->{actiontype} . " for " . $row->{parentphys} . "\n";
+#                    say "rescheduling " . $row->{actiontype} . " for " . $row->{parentphys} if $gCfg{debug};
                     ++$startover_count;
                     goto STARTOVER;
                 }
@@ -2467,7 +2465,7 @@ sub ScheduleRevTime {
 
         &UpdateGitRepository($row, $parentpath, $path, $giti, 1, undef);
     }
-    print "done scheduling -- " . (scalar @$rows) . " rows \n";
+    say "done scheduling -- " . (scalar @$rows) . " rows" if $gCfg{debug};
 }
 
 
@@ -2832,7 +2830,7 @@ sub RmProject {
     my $path_re = qr/^\Q${path}${sep}\E/;
     my $path_nosep_re = qr/^\Q${path}\E$/;
 
-#    print "git_image: " . Dumper($git_image) . "\n";
+#    say "git_image: " . Dumper($git_image) if $gCfg{debug};
 
     foreach my $key (keys %{$git_image}) {
         if (ref($git_image->{$key})) {
@@ -3016,7 +3014,7 @@ sub UpdateGitRepository {
                         @{$git_image->{$row->{physname}}} = grep {!/$path_re/} @{$git_image->{$row->{physname}}};
 
                         if (scalar @{$git_image->{$row->{physname}}} == 0) {
-                            print "UpdateGitRepository delete @{[VSS_FILE]}: deleting git image $row->{physname}\n" if $gCfg{debug};
+                            say "UpdateGitRepository delete @{[VSS_FILE]}: deleting git image $row->{physname}" if $gCfg{debug};
                             delete $git_image->{$row->{physname}};
                         }
                         &GitRm($repo, $parentpath, $path, $row->{itemtype}, $row->{actiontype}, $row->{action_id});
@@ -3085,7 +3083,7 @@ sub UpdateGitRepository {
                         my $path_re = qr/^\Q$path\E$/;
                         @{$git_image->{$row->{info}}} = grep {!/$path_re/} @{$git_image->{$row->{info}}};
                         if (scalar @{$git_image->{$row->{info}}} == 0) {
-                            print "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]}: deleting git image $row->{info}\n" if $gCfg{debug};
+                            say "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]}: deleting git image $row->{info}" if $gCfg{debug};
                             delete $git_image->{$row->{info}};
                         }
                     } elsif (! -f $link_file) {
