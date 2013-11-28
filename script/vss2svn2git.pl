@@ -1409,7 +1409,6 @@ VSS Encoding : $gCfg{encoding}
 @{[PROGNAME]} ver  : $VERSION
 @{[SSPHYS]} exe   : $gCfg{ssphys}
 @{[SSPHYS]} ver   : $ssversion
-XML Parser   : $gCfg{xmlParser}
 Task         : $gCfg{task}
 Rev Time     : $gCfg{revtimerange}
 
