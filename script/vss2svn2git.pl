@@ -103,7 +103,7 @@ use constant {
     ACTION_LABEL => 'LABEL',
 };
 
-our(%gCfg, %gSth, %gErr, $gSysOut);
+our(%gCfg, %gErr, $gSysOut);
 
 our $VERSION = '0.11.0-nightly.$LastChangedRevision$';
 $VERSION =~ s/\$.*?(\d+).*\$/$1/; # get only the number out of the svn revision
@@ -224,7 +224,6 @@ my @physical_action_params = (
 # Data for SystemInfo table
 my @system_info_params = (
     { 'task' =>    'VARCHAR' },
-    { 'step' =>    'VARCHAR' },
     { 'ssphys' =>  'VARCHAR' },
     { 'tempdir' => 'VARCHAR' },
     { 'starttime' => 'VARCHAR' },
@@ -258,15 +257,15 @@ sub RunConversion {
     die "FATAL ERROR: Unknown task '$gCfg{task}'\n"
         unless defined $taskmap->{$gCfg{task}};
 
-    for ($i = $taskmap->{$gCfg{task}}; $i < (scalar @joblist); ++$i) {
+    for ($i = $taskmap->{$gCfg{task}}; $i <= $taskmap->{"@{[TASK_DONE]}"}; ++$i) {
         $info = $joblist[$i];
 
+        &SetSystemTask( $info->{task} );
         say "TASK: $gCfg{task}: "
             . POSIX::strftime(ISO8601_FMT . "\n", localtime);
-        push @{ $gCfg{tasks} }, $gCfg{task};
 
         if ($gCfg{prompt}) {
-            say "Press ENTER to continue...";
+            say "Press ENTER to continue or 'quit' to quit...";
             my $temp = <STDIN>;
             die if $temp =~ m/^quit/i;
         }
@@ -280,7 +279,6 @@ sub RunConversion {
         }
 
         &{ $info->{handler} };
-        &SetSystemTask( $joblist[$i+1]->{task} );
     }
 
 }  #  End RunConversion
@@ -1361,7 +1359,7 @@ sub ExportVssPhysFile {
 ###############################################################################
 sub ShowHeader {
     my $info = $gCfg{task} eq TASK_INIT ? 'BEGINNING CONVERSION...' :
-        "RESUMING CONVERSION FROM TASK '$gCfg{task}' AT STEP $gCfg{step}...";
+        "RESUMING CONVERSION FROM TASK '$gCfg{task}'...";
     my $starttime = ctime($^T);
 
     my $ssversion = &GetSsVersion();
@@ -1596,61 +1594,12 @@ sub StopConversion {
 #  SetSystemTask
 ###############################################################################
 sub SetSystemTask {
-    my($task, $leavestep) = @_;
+    my($task) = @_;
 
-    say "\nSETTING TASK $task" if $gCfg{verbose};
-
-    my($sql, $sth);
-
-    $sth = $gSth{'SYSTEMTASK'};
-
-    if (!defined $sth) {
-        $sql = <<"EOSQL";
-UPDATE
-    SystemInfo
-SET
-    task = ?
-EOSQL
-
-        $sth = $gSth{'SYSTEMTASK'} = $gCfg{dbh}->prepare($sql);
-    }
-
-    $sth->execute($task);
-
+    $gCfg{dbh}->do('UPDATE SystemInfo SET task = ?', undef, $task);
     $gCfg{task} = $task;
 
-    &SetSystemStep(0) unless $leavestep;
-
 }  #  End SetSystemTask
-
-###############################################################################
-#  SetSystemStep
-###############################################################################
-sub SetSystemStep {
-    my($step) = @_;
-
-    say "\nSETTING STEP $step" if $gCfg{verbose};
-
-    my($sql, $sth);
-
-    $sth = $gSth{'SYSTEMSTEP'};
-
-    if (!defined $sth) {
-        $sql = <<"EOSQL";
-UPDATE
-    SystemInfo
-SET
-    step = ?
-EOSQL
-
-        $sth = $gCfg{'SYSTEMSTEP'} = $gCfg{dbh}->prepare($sql);
-    }
-
-    $sth->execute($step);
-
-    $gCfg{step} = $step;
-
-}  #  End SetSystemStep
 
 ###############################################################################
 #  ConnectDatabase
@@ -2067,7 +2016,6 @@ sub Initialize {
 
     &WriteDestroyedPlaceholderFiles();
 
-    $gCfg{step} = 0;
 }  #  End Initialize
 
 ###############################################################################
