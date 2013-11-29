@@ -258,7 +258,7 @@ sub RunConversion {
     die "FATAL ERROR: Unknown task '$gCfg{task}'\n"
         unless defined $taskmap->{$gCfg{task}};
 
-    for ($i = $taskmap->{$gCfg{task}}; $i < (scalar @joblist)-1; ++$i) {
+    for ($i = $taskmap->{$gCfg{task}}; $i < (scalar @joblist); ++$i) {
         $info = $joblist[$i];
 
         say "TASK: $gCfg{task}: "
