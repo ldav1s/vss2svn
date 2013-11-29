@@ -3390,3 +3390,83 @@ sub SearchForPath {
 
     return $path;
 }
+
+__END__
+
+=head1 NAME
+
+vss2svn2git.pl -- Import a Visual SourceSafe database into a git repository
+
+=head1 SYNOPSIS
+
+vss2svn2git.pl --vssdir F<directory> --author_info F<file> [options]
+
+  Required:
+    --vssdir F<directory>      VSS database
+    --author_info F<file>      mappings for VSS usernames to git authors
+
+  Options:
+    --ssphys F<file>           Path to ssphys program
+    --tempdir F<directory>     vss2svn2git work directory
+    --repo F<directory>        git repository directory
+    --revtimerange <int>       maximum commit time
+    --encoding <encoding>      specify VSS encoding
+    --resume                   resume failed or aborted run
+    --task <task>              specify task to resume
+    --verbose                  print more info during processing
+    --debug                    print debugging output
+    --timing                   print timing info
+
+=over 8
+
+=item B<--ssphys>
+
+Specify a path to the ssphys program.  It reads the VSS database.
+
+=item B<--tempdir>
+
+Work directory to use during conversion.  Defaults to C<_vss2svn2git>.
+Must be on the same filesystem as I<--repo>.
+
+=item B<--repo>
+
+The git directory to use during conversion.  Defaults to C<repo>.
+Must be on the same filesystem as I<--tempdir>.
+
+=item B<--revtimerange>
+
+The maximum time difference in seconds that may be spanned by a
+git commit.  Defaults to 3600 s.
+
+=item B<--encoding>
+
+Specify the VSS encoding to use.  Defaults to C<windows-1252>.
+
+=item B<--resume>
+
+Resume a failed or aborted previous run.
+
+=item B<--task>
+
+Specify the task to resume.
+
+=item B<--verbose>
+
+Print more information to the standard output during conversion.
+
+=item B<--debug>
+
+Print more information to the standard output during conversion.
+
+=item B<--timing>
+
+Print timing information.
+
+=back
+
+=head1 DESCRIPTION
+
+Migrate the Visual SourceSafe database given by I<--vssdir> using the
+VSS/git author information given by I<--author_info>.
+
+=cut
