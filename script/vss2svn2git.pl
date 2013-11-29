@@ -271,6 +271,13 @@ sub RunConversion {
             die if $temp =~ m/^quit/i;
         }
 
+        if (!defined $gCfg{mintime} && !defined $gCfg{maxtime}
+            && $i >= $taskmap->{"@{[TASK_GITREAD]}"}) {
+            &TimestampLimits;
+            if (!defined $gCfg{mintime} || !defined $gCfg{maxtime}) {
+                warn "There doesn't seem to be any physical action data";
+            }
+        }
 
         &{ $info->{handler} };
         &SetSystemTask( $joblist[$i+1]->{task} );
@@ -799,7 +806,6 @@ sub GitReadImage {
     my($sth, $tth, $rows);
     my ($last_time);
 
-    &TimestampLimits;
 
     my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
 
@@ -955,10 +961,6 @@ sub ReplayLabels {
 
     my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
     $repo->setlog($gCfg{debug});
-
-    if ($gCfg{resume}) {
-        &TimestampLimits;
-    }
 
     $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule'); # for resume
     $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
