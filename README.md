@@ -1,17 +1,21 @@
-# vss2svn2git - Use vss2svn to import a VSS database into git
+# vss2svn2git - Use vss2svn to import a Visual SourceSafe database into git
 
 Fork of @irontoby/vss2svn to import files into a git repository.
 
 Once again, I needed some way of extracting history from an
-old VSS 6.0 database, and vss2git didn't do it correctly.  Neither did
-the precompiled version of vss2svn, but it did a slightly better
+old [Visual SourceSafe](http://msdn.microsoft.com/en-us/library/3h0544kx(VS.80).aspx)
+ 6.0 database, and [vss2git](http://code.google.com/p/vss2git/)
+ didn't do it correctly.  Neither did the precompiled version of
+ [vss2svn](http://code.google.com/p/vss2svn/) (which has
+ [an official GitHub repository](https://github.com/irontoby/vss2svn/) now,
+ but didn't when I started this), but it did a slightly better
 job.  Having contributed to the "legacy" vss2svn as well as the
 current vss2svn, I thought it might be better to start with what I
 know.
 
 The idea I've come up with is to use `ssphys` and it's related tools to
 import the data. I've actually rewritten the scheduling to work more
-on the PhysicalAction stage.  I still probably need to review the
+on the earlier stages of `vss2svn`.  I still probably need to review the
 original scheduler to see if I can improve mine.  It still does need
 improvement.
 
@@ -23,7 +27,7 @@ newer version has a few features that made the switch worthwhile.
 
 It'll be important to set up the files to be imported using the
 `.gitattributes` and `.gitignores` in the git repository for crlf
-adjustment before starting the import.  I still have not tried this.
+adjustment, etc. before starting the import.  I still have not tried this.
 
 This is very experimental right now, and might be kind of broken.
 Also it'll only work on Linux for now, because it supports hard links
@@ -74,11 +78,11 @@ so something like (say for an 8GiB JFS filesystem):
 
 All the files that are VSS shares at the end of VSS history are
 documented in the `--repo` directory in `.git/hooks/post-merge`.  I
-just followed the suggestion of one Stack Overflow user
-<http://stackoverflow.com/a/9322283/425738> who apparently uses this
-technique to have persistent hard linked files in his local
-repository.  I have no experience with it.  This file can be safely
-removed if you don't want VSS shares anymore.
+just followed the suggestion of
+ [one Stack Overflow user](http://stackoverflow.com/a/9322283/425738)
+ who apparently uses this technique to have persistent hard linked
+ files in his local repository.  I have no experience with it.  This
+ file can be safely removed if you don't want VSS shares anymore.
 
 I'd recommend performing a `git gc` of the repository.  If you don't
 want the VSS shares, I'd also recommend a `git clone` of the
@@ -130,3 +134,6 @@ they are the same file.  This should not be a problem most of the time.
   scheduled.  Now that the window slides, only the _new_ commits need to
   be scheduled.
 * Add progess indicators for non-verbose/debug runs.
+* Find a better way of dealing with destroyed files.  Now destroyed
+ files are filtered out by git after the migration, which is slow.
+ There must be a better way of doing this on the input side.
