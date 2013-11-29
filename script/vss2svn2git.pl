@@ -1659,7 +1659,7 @@ sub ConnectDatabase {
     my $db = $gCfg{sqlitedb};
 
     if (-e $db && (!$gCfg{resume} ||
-                   (defined($gCfg{task}) && $gCfg{task} eq TASK_INIT))) {
+                   ($gCfg{task} eq TASK_INIT))) {
 
         unlink $db or &ThrowError("Could not delete existing database "
                                   .$gCfg{sqlitedb});
@@ -1684,14 +1684,11 @@ sub DisconnectDatabase {
 #  SetupGlobals
 ###############################################################################
 sub SetupGlobals {
-    if (defined($gCfg{task}) && $gCfg{task} eq TASK_INIT) {
+    if ($gCfg{task} eq TASK_INIT) {
         &InitSysTables;
     } else {
         &ReloadSysTables;
     }
-
-    $gCfg{ssphys} = $gCfg{ssphys} // SSPHYS;
-
 }  #  End SetupGlobals
 
 ###############################################################################
@@ -1944,8 +1941,7 @@ sub Initialize {
     &GiveHelp("Must specify --vssdir") if !defined($gCfg{vssdir});
     &GiveHelp("Must specify --author_info") if !defined($gCfg{author_info});
     $gCfg{tempdir} = $gCfg{tempdir} // TEMPDIR;
-    $gCfg{repo} = $gCfg{repo} // REPO;
-    $gCfg{repo} = abs_path($gCfg{repo});
+    $gCfg{repo} = abs_path($gCfg{repo} // REPO);
     $gCfg{vssdir} = abs_path($gCfg{vssdir});
     $gCfg{vssdatadir} = File::Spec->catdir($gCfg{vssdir}, 'data');
     $gCfg{revtimerange} = REVTIMERANGE unless defined($gCfg{revtimerange}) && $gCfg{revtimerange} > 0;
@@ -2022,7 +2018,8 @@ sub Initialize {
     # All deleted VSS_PROJECT entries get moved here while deleted
     $gCfg{deleted} = File::Spec->catdir($gCfg{tempdir}, 'deleted');
 
-    $gCfg{resume} = 1 if defined $gCfg{task} && ($gCfg{task} ne TASK_INIT);
+    $gCfg{task} = $gCfg{task} // TASK_INIT;
+    $gCfg{resume} = 1 if ($gCfg{task} ne TASK_INIT);
 
     if ($gCfg{resume} && !-e $gCfg{sqlitedb}) {
         warn "WARNING: --resume set but no database exists; "
@@ -2033,7 +2030,8 @@ sub Initialize {
     if ($gCfg{debug}) {
         $gCfg{verbose} = 1;
     }
-    $gCfg{timing} = 0 unless defined $gCfg{timing};
+    $gCfg{timing} = $gCfg{timing} // 0;
+    $gCfg{ssphys} = $gCfg{ssphys} // SSPHYS;
 
     $gCfg{starttime} = scalar localtime($^T);
 
@@ -2069,9 +2067,6 @@ sub Initialize {
 
     &WriteDestroyedPlaceholderFiles();
 
-    $gCfg{ssphys} ||= SSPHYS;
-
-    $gCfg{task} = TASK_INIT;
     $gCfg{step} = 0;
 }  #  End Initialize
 
