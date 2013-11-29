@@ -122,3 +122,11 @@ incompatible attributes in `.gitattributes`:
 
 It'll be hard to say exactly _which_ attribute will be applied since
 they are the same file.  This should not be a problem most of the time.
+
+# TODO
+
+* Fix `--resume`, it's probably broken
+* When a window of commits is scheduled, the _entire_ window is
+  scheduled.  Now that the window slides, only the _new_ commits need to
+  be scheduled.
+* Add progess indicators for non-verbose/debug runs.
