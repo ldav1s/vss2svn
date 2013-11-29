@@ -1975,10 +1975,15 @@ sub Initialize {
         while (<$info>) {
             my ($username, $author, $author_email) = split(/\t/);
             if (defined $username) {
+                if ($username eq '') {
+                    ++$err;
+                    say "Empty username";
+                }
+
                 if (!defined $author) {
                     ++$err;
                     say "Undefined author for username `$username'";
-                } elsif (defined $author && $author eq '') {
+                } elsif ($author eq '') {
                     ++$err;
                     say "Empty author for username `$username'";
                 }
@@ -1986,7 +1991,7 @@ sub Initialize {
                 if (!defined $author_email) {
                     ++$err;
                     say "Undefined author email for username `$username'";
-                } elsif (defined $author_email && $author_email eq '') {
+                } elsif ($author_email eq '') {
                     ++$err;
                     say "Empty author email for username `$username'";
                 }
