@@ -25,6 +25,7 @@ use Time::CTime;
 use Benchmark ':hireswallclock';
 use Fcntl ':mode';
 use Storable qw(dclone nfreeze thaw);
+use Term::ProgressBar;
 
 use lib '.';
 use POSIX;
@@ -415,6 +416,18 @@ sub GetPhysVssHistory {
     my $physname = '';
     my $limcount = 0;
 
+    my ($phys_count) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM Physical');
+    my $prg_cnt = 0;
+    my $progress;
+    my $next_update = 0;
+
+    if (!($gCfg{debug} || $gCfg{verbose})) {
+        $progress = Term::ProgressBar->new({name  => 'VSS History',
+                                            count => $phys_count,
+                                            ETA   => 'linear', });
+        $progress->max_update_rate(1);
+    }
+
     # Break up inserts into multiple transactions
     # Most files have one insert only (and most one set of VALUES only)!
     my $sth = $gCfg{dbh}->prepare("SELECT * FROM Physical "
@@ -439,6 +452,12 @@ sub GetPhysVssHistory {
             die "Failed to load VSS items for `$physname'";
         } else {
             $gCfg{dbh}->commit;
+        }
+
+        $prg_cnt += $limcount;
+        if (defined $progress) {
+            $next_update = $progress->update($prg_cnt)
+                if $prg_cnt > $next_update || $prg_cnt == $phys_count;
         }
     } while ($limcount == PHYSICAL_FILES_LIMIT);
 
@@ -809,6 +828,19 @@ sub GitReadImage {
 
     $repo->setlog($gCfg{debug});
 
+    # phys_ac_count is only the maximum
+    my ($phys_ac_count) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalAction');
+    my $progress;
+    my $next_update = 0;
+
+    if (!($gCfg{debug} || $gCfg{verbose})) {
+        $progress = Term::ProgressBar->new({name  => 'Actions',
+                                            count => $phys_ac_count,
+                                            ETA   => 'linear', });
+        $progress->max_update_rate(1);
+    }
+
+
     $last_time = $gCfg{mintime};
     $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
 
@@ -883,6 +915,11 @@ sub GitReadImage {
                        . "$gCfg{commit_id} AS commit_id, * FROM PhysicalActionSchedule "
                        . "ORDER BY schedule_id");
         $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
+
+        if (defined $progress) {
+            $next_update = $progress->update($dump_cnt)
+                if $dump_cnt > $next_update || $dump_cnt == $phys_ac_count;
+        }
     }
 
     # document our hard links for 'git pull'
@@ -944,6 +981,12 @@ EOT
         chmod 0755, $file;
     }
 
+    # don't know if phys_ac_count was actually reached in the loop
+    if (defined $progress) {
+        $next_update = $progress->update($phys_ac_count)
+            if $phys_ac_count >= $next_update;
+    }
+
     1;
 }
 
@@ -959,6 +1002,19 @@ sub ReplayLabels {
 
     my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
     $repo->setlog($gCfg{debug});
+
+    my ($label_count) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM LabelBookmark');
+    my $prg_count;
+    my $progress;
+    my $next_update = 0;
+
+    if (!($gCfg{debug} || $gCfg{verbose})) {
+        $progress = Term::ProgressBar->new({name  => 'Labels',
+                                            count => $label_count,
+                                            ETA   => 'linear', });
+        $progress->max_update_rate(1);
+    }
+
 
     $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule'); # for resume
     $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
@@ -1086,6 +1142,12 @@ sub ReplayLabels {
         $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
 
         ++$first_label;
+
+        if (defined $progress) {
+            $prg_count += $dump_cnt;
+            $next_update = $progress->update($prg_count)
+                if $prg_count > $next_update || $prg_count == $label_count;
+        }
     }
 
 

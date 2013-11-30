@@ -20,6 +20,7 @@ Module::Build->new
           'File::Spec' => 0,
           'IPC::Run' => 0,
           'Data::Dumper' => 0,
+          'Term::ProgressBar' => 0,
       },
       script_files => { 'script/vss2svn2git.pl' => 'script/vss2svn2git.pl', 'ssphys/ssphys' => 'bin/ssphys'},
       pm_files => { 'script/Vss2Svn2Git/GitLogger.pm' => 'lib/Vss2Svn2Git/GitLogger.pm' },
