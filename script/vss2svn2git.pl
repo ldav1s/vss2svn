@@ -30,6 +30,7 @@ use lib '.';
 use POSIX;
 use Git::Repository qw( +Vss2Svn2Git::GitLogger );
 use Data::Dumper;
+use version; our $VERSION = version->declare("v0.90.0");
 
 # task names for conversion states
 use constant {
@@ -104,9 +105,6 @@ use constant {
 };
 
 our(%gCfg, %gErr, $gSysOut);
-
-our $VERSION = '0.11.0-nightly.$LastChangedRevision$';
-$VERSION =~ s/\$.*?(\d+).*\$/$1/; # get only the number out of the svn revision
 
 # The git image is the physical layout of files in the git repo
 # that get built up as we step through history.
