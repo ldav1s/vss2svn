@@ -247,9 +247,11 @@ sub RunConversion {
     my $info;
     my $taskmap = {};
     my $i = 0;
+    my $task_name_sz = 0;
 
     foreach my $e (@joblist) {
         $taskmap->{$e->{task}} = $i++;
+        $task_name_sz = length($e->{task}) if length($e->{task}) > $task_name_sz;
     }
 
     die "FATAL ERROR: Unknown task '$gCfg{task}'\n"
@@ -259,8 +261,8 @@ sub RunConversion {
         $info = $joblist[$i];
 
         &SetSystemTask( $info->{task} );
-        say "TASK: $gCfg{task}: "
-            . POSIX::strftime(ISO8601_FMT . "\n", localtime);
+        say sprintf("TASK: %*s: %s", $task_name_sz, $gCfg{task},
+                    POSIX::strftime(ISO8601_FMT . "\n", localtime));
 
         if ($gCfg{prompt}) {
             say "Press ENTER to continue or 'quit' to quit...";
