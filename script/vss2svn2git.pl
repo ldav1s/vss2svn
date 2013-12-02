@@ -1192,7 +1192,7 @@ sub Cleanup {
     my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
     $repo->setlog($gCfg{debug});
 
-    $repo->logrun(checkout => '-q', 'master');
+    $repo->logrun(checkout => 'master');
 
     1;
 }

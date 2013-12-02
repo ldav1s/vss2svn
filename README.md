@@ -133,7 +133,6 @@ they are the same file.  This should not be a problem most of the time.
 * When a window of commits is scheduled, the _entire_ window is
   scheduled.  Now that the window slides, only the _new_ commits need to
   be scheduled.
-* Add progess indicators for non-verbose/debug runs.
 * Find a better way of dealing with destroyed files.  Now destroyed
  files are filtered out by git after the migration, which is slow.
  There must be a better way of doing this on the input side.
