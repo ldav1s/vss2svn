@@ -1500,14 +1500,31 @@ EOTXT
     {
         use integer;
         my $secs = time - $^T;
+        my @fmt;
+        my @fmt_data;
+        my @time_params = (
+            {'d' => (3600*24)},
+            {'h' => 3600},
+            {'m' => 60}
+            );
 
-        my $hours = $secs / 3600;
-        $secs -= ($hours * 3600);
+        my $first_time = 1;
+        foreach my $t (@time_params) {
+            my ($dur_name, $dur_time) = each %$t;
 
-        my $mins = $secs / 60;
-        $secs -= ($mins * 60);
+            if ((!$first_time && (scalar @fmt_data) > 0) || $secs >= $dur_time) {
+                my $dur = $secs / $dur_time;
+                $secs %= $dur_time;
+                push @fmt, "%2.2i$dur_name";
+                push @fmt_data, $dur;
+            }
+            $first_time = 0;
+        }
 
-        $elapsed = sprintf("%2.2i:%2.2i:%2.2i", $hours, $mins, $secs);
+        push @fmt, "%2.2is";
+        push @fmt_data, $secs;
+
+        $elapsed = sprintf(join(" ", @fmt), @fmt_data);
     }
 
     my($actions, $discarded, $revisions, $mintime, $maxtime) = &GetStats();
@@ -1515,7 +1532,7 @@ EOTXT
     print <<"EOTXT";
 Started at              : $starttime
 Ended at                : $endtime
-Elapsed time            : $elapsed (H:M:S)
+Elapsed time            : $elapsed
 
 VSS Actions read        : $actions
 VSS Actions discarded   : $discarded
