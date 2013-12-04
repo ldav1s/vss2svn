@@ -692,6 +692,10 @@ VERSION:
                 $info = $version->findvalue('Action/SrcPath');
                 $info =~ s/^..(.*)$/$1/;
             }
+            when (ACTION_SHARE) {
+                # need these to reassemble SHARE+BRANCH actions
+                $info = $version->findvalue('Action/Physical');
+            }
         }
 
 
