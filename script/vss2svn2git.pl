@@ -1699,6 +1699,8 @@ sub ConnectDatabase {
                               {RaiseError => 1, AutoCommit => 1})
         or die "Couldn't connect database $db: $DBI::errstr";
 
+    $gCfg{dbh}->func( 'vss_phys_to_num', 1, \&PhyToNum, 'create_function' );
+
 }  #  End ConnectDatabase
 
 ###############################################################################
@@ -2236,7 +2238,8 @@ sub SchedulePhysicalActions {
                                   . '  (SELECT action_id FROM PhysicalActionSchedule '
                                   . '   UNION ALL SELECT action_id FROM PhysicalActionRetired '
                                   . '   UNION ALL SELECT action_id FROM PhysicalActionDiscarded) '
-                                  . 'ORDER BY timestamp ASC, priority ASC, parentdata ASC');
+                                  . 'ORDER BY timestamp ASC, priority ASC, '
+                                  . 'vss_phys_to_num(physname) ASC, parentdata ASC');
     if (defined $changeset_count && $changeset_count > 0) {
         # We have unused data from the last scheduling pass, let's use it.
         $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
@@ -3468,6 +3471,22 @@ sub SearchForPath {
     }
 
     return $path;
+}
+
+# From <http://support.microsoft.com/KB/171350>
+sub PhyToNum {
+    my($physname) = @_;
+    use bigint;
+
+    my $lFileNum = 0;
+    my @pchars = split("", $physname);
+    my $i;
+
+    for ( $i = $#pchars; $i >= 0; --$i ) {
+        $lFileNum *= 26;  # Multiply by the appropriate power of 26
+        $lFileNum += (ord($pchars[$i]) - ord('A')); # Convert the value
+    }
+    return ($lFileNum);
 }
 
 __END__
