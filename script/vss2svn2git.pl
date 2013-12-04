@@ -2554,7 +2554,7 @@ sub CheckAffinity {
             my @iids = map { $_->{schedule_id} } @$ino_data;
 
             if (!(@oids ~~ @iids)) {
-
+                say "affinity changed" if $gCfg{debug};
                 $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
                 eval {
                     my $i = 0;
