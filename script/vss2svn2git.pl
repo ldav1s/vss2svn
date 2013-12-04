@@ -1227,7 +1227,8 @@ EOSQL
 
 ###############################################################################
 # FixupParentActions
-# Fixes up typical ACTION_ADD, ACTION_BRANCH missing comment data for parents in PhysicalAction
+# Fixes up typical ACTION_ADD, ACTION_BRANCH/ACTION_SHARE
+# missing comment data for parents in PhysicalAction
 ###############################################################################
 sub FixupParentActions {
     my $sql = <<"EOSQL";
@@ -1270,35 +1271,33 @@ EOSQL
     }
 
     # timestamp seems to be earlier in child than parent
-    # give each branch a little wiggle room timestamp-wise
+    # give each SHARE/BRANCH a little wiggle room timestamp-wise
     $sql = <<"EOSQL";
-SELECT B.comment AS comment, A.action_id AS action_id, B.timestamp AS timestamp
-FROM (SELECT physname, action_id
+SELECT B.comment AS comment, A.action_id AS action_id
+FROM (SELECT info, action_id, timestamp
       FROM PhysicalAction
       WHERE itemtype = @{[VSS_FILE]}
       AND parentdata != 0
-      AND actiontype = '@{[ACTION_BRANCH]}') AS A
-INNER JOIN (SELECT physname, comment, timestamp
+      AND actiontype IN ('@{[ACTION_BRANCH]}', '@{[ACTION_SHARE]}')) AS A
+INNER JOIN (SELECT info, comment, timestamp
               FROM PhysicalAction
               WHERE itemtype = @{[VSS_FILE]}
               AND parentdata = 0
               AND actiontype = '@{[ACTION_BRANCH]}') AS B
-USING (physname)
+ON A.info = B.info AND A.timestamp BETWEEN B.timestamp-@{[TIMESTAMP_DELTA]} AND B.timestamp+@{[TIMESTAMP_DELTA]}
 EOSQL
     $sth = $gCfg{dbh}->prepare($sql);
-    $tth = $gCfg{dbh}->prepare("UPDATE PhysicalAction "
-                               . "SET comment = ? "
-                               . "WHERE action_id = ? "
-                               . "AND comment IS NULL "
-                               . "AND timestamp BETWEEN ? AND ?");
+    $tth = $gCfg{dbh}->prepare('UPDATE PhysicalAction '
+                               . 'SET comment = ? '
+                               . 'WHERE action_id = ? '
+                               . "AND comment IS NULL");
 
     $sth->execute();
 
     $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
     eval {
         while (defined($row = $sth->fetchrow_hashref() )) {
-            $tth->execute($row->{comment}, $row->{action_id},
-                          $row->{timestamp}-(TIMESTAMP_DELTA), $row->{timestamp}+(TIMESTAMP_DELTA));
+            $tth->execute($row->{comment}, $row->{action_id});
         }
     };
 
