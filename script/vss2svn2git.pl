@@ -898,7 +898,7 @@ sub GitReadImage {
                 }
             }
 
-            &UpdateGitRepository($row, $parentpath, $path, \%git_image, 0, $repo);
+            &UpdateGitRepository($row, $parentpath, $path, \%git_image, $repo);
         }
 
         if (defined $username) {
@@ -2262,217 +2262,10 @@ sub SchedulePhysicalActions {
     if (defined $should_schedule && $should_schedule > 0) {
         say "timestamp range: $timestamp - " . ($timestamp+$gCfg{revtimerange}) if $gCfg{debug};
         &CheckAffinity();
-        &ScheduleRevTime();
     }
 
     &GetOneChangeset($timestamp);
 }
-
-###############################################################################
-#  ScheduleRevTime
-###############################################################################
-sub ScheduleRevTime {
-    my($sth, $rows);
-    state $index = 0;
-
-    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
-
-    my $startover_count = 0;
-    # We may end up here a few times as we schedule
-  STARTOVER:
-    # deep clone these so we can simulate
-    my $giti = dclone(\%git_image);
-
-    # start scheduling
-    $sth->execute();
-    $rows = $sth->fetchall_arrayref( {} );
-
-    # This seems to be a kind of insertion sort, give it a bound
-    die "failed to schedule too many times" if $startover_count > ((scalar @$rows)*(scalar @$rows));
-
-  ROW:
-    foreach my $row (@$rows) {
-        if ($index == 0
-            && $row->{physname} eq VSSDB_ROOT
-            && $row->{actiontype} eq ACTION_ADD
-            && $row->{itemname} eq "") {
-            # first time through, setting up the VSS root project
-            # we don't need this one
-            ++$index;
-            $gCfg{dbh}->do("INSERT INTO PhysicalActionDiscarded "
-                           . "SELECT NULL AS discarded_id, "
-                           . "$gCfg{commit_id} AS commit_id, * "
-                           . "FROM PhysicalActionSchedule WHERE schedule_id = $row->{schedule_id} "
-                           . "ORDER BY schedule_id");
-            $gCfg{dbh}->do("DELETE FROM PhysicalActionSchedule WHERE schedule_id = $row->{schedule_id}");
-            next ROW;
-        }
-
-        my ($path, $parentpath);
-
-        if (defined $row->{parentphys}) {
-            my $rescheduled = 0;
-            if (!defined $giti->{$row->{parentphys}}) {
-                # we are out of schedule
-
-#                    say "out of order: parentphys " . $row->{parentphys} . " physname: " . $row->{physname} if $gCfg{debug};
-#                    say "giti: " . Dumper($giti) if $gCfg{debug};
-
-                if ($row->{actiontype} eq ACTION_ADD || $row->{actiontype} eq ACTION_SHARE) {
-                    # we are added out of schedule
-                    my $tth;
-                    my $ooo;
-
-#                    $tth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
-#                                               . 'WHERE timestamp = ? '
-#                                               . 'ORDER BY schedule_id');
-#                    $tth->execute($row->{timestamp});
-#                    $ooo = $tth->fetchall_arrayref();
-#                    say "slice entries before: " . Dumper($ooo) if $gCfg{debug};
-
-                    # grab all the out of order entries
-                    $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
-                                               . 'WHERE parentphys = ? AND timestamp = ? '
-                                               . 'ORDER BY schedule_id');
-                    $tth->execute($row->{parentphys}, $row->{timestamp});
-                    my $ooo_data = $tth->fetchall_arrayref({});
-
-                    # throw the out of order ones into a new table
-                    $tth = $gCfg{dbh}->prepare('CREATE TEMPORARY TABLE tmp AS '
-                                               . ' SELECT * FROM PhysicalActionSchedule '
-                                               . ' WHERE schedule_id IN '
-                                               . ' (SELECT schedule_id FROM PhysicalActionSchedule '
-                                               . '  WHERE parentphys = ? AND timestamp = ?)');
-                    $tth->execute($row->{parentphys}, $row->{timestamp});
-
-                    # clear out the out of order records
-                    $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule '
-                                   . 'WHERE schedule_id IN (SELECT schedule_id FROM tmp)');
-
-                    # count in order entries
-                    $tth = $gCfg{dbh}->prepare('SELECT MAX(schedule_id) FROM PhysicalActionSchedule '
-                                               . 'WHERE timestamp = ? AND physname = ?');
-                    $tth->execute($row->{timestamp}, $row->{parentphys});
-                    my $max_sched = $tth->fetchall_arrayref()->[0][0];
-
-                    if (!defined $max_sched) {
-                        # The contents of tmp is duplicate from the child.
-                        # We've already deleted the offending entry from PhysicalActionSchedule.
-                        $tth = $gCfg{dbh}->prepare('SELECT schedule_id FROM PhysicalActionSchedule '
-                                                   . 'WHERE timestamp = ? AND physname = ?');
-                        $tth->execute($row->{timestamp}, $row->{physname});
-                        $max_sched = $tth->fetchall_arrayref();
-                        if (scalar @$max_sched == 1) {
-                            $gCfg{dbh}->do("INSERT INTO PhysicalActionDiscarded "
-                                           . "SELECT NULL AS discarded_id, "
-                                           . "$gCfg{commit_id} AS commit_id, * "
-                                           . "FROM tmp ORDER by schedule_id");
-                            $gCfg{dbh}->do('DROP TABLE tmp');
-                            ++$startover_count;
-                            goto STARTOVER;
-                        }
-                        undef $max_sched;
-                    }
-
-#                    say "max sched: $max_sched" if $gCfg{debug};
-
-                    $tth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id FROM PhysicalActionSchedule '
-                                               . 'WHERE timestamp = ? AND schedule_id > ? '
-                                               . 'ORDER BY schedule_id');
-                    $tth->execute($row->{timestamp}, $ooo_data->[0]{schedule_id});
-                    $ooo = $tth->fetchall_arrayref({});
-
-                    # renumber in order entries
-                    my $idx = 0;
-                    foreach my $o (@$ooo) {
-                        $gCfg{dbh}->do('UPDATE PhysicalActionSchedule SET schedule_id='
-                                       . ($ooo_data->[0]{schedule_id}+$idx)
-                                       . ' WHERE schedule_id = ' . $o->{schedule_id}
-                                       . ' AND action_id = ' . $o->{action_id});
-                        ++$idx;
-                    }
-
-
-                    $tth = $gCfg{dbh}->prepare('SELECT * FROM tmp');
-                    $tth->execute();
-                    $ooo = $tth->fetchall_arrayref();
-
-#                    say "out of order: " . Dumper($ooo) if $gCfg{debug};
-
-                    # renumber the out of order entries
-                    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
-                    eval {
-                        my $idx2 = 0;
-                        foreach my $o (@$ooo_data) {
-                            my $j = ($ooo_data->[0]{schedule_id}+$idx);
-                            say "out of order: $j $o->{schedule_id}" if $gCfg{debug};
-                            my $rv = $gCfg{dbh}->do("UPDATE tmp SET schedule_id=$j "
-                                                    . "WHERE schedule_id = $o->{schedule_id} "
-                                                    . "AND action_id = $o->{action_id}");
-#                        say "rv: $rv" if $gCfg{debug};
-                            ++$idx;
-                            ++$idx2;
-                        }
-                    };
-                    if ($@) {
-                        warn "Transaction aborted because $@";
-                        eval { $gCfg{dbh}->rollback };
-                        die "Failed to reorder out of order items: timestamp: $row->{timestamp}";
-                    } else {
-                        $gCfg{dbh}->commit;
-                    }
-
-#                    $tth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
-#                                                  . 'WHERE timestamp = ? '
-#                                                  . 'ORDER BY schedule_id');
-#                    $tth->execute($row->{timestamp});
-#                    $ooo = $tth->fetchall_arrayref();
-#                    say "in order renumbered: " . Dumper($ooo) if $gCfg{debug};
-
-#                    $tth = $gCfg{dbh}->prepare('SELECT * FROM tmp');
-#                    $tth->execute();
-#                    $ooo = $tth->fetchall_arrayref();
-#                    say "out of order renumbered: " . Dumper($ooo) if $gCfg{debug};
-
-                    $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule SELECT * FROM tmp');
-                    $gCfg{dbh}->do('DROP TABLE tmp');
-
-#                    $tth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
-#                                               . 'WHERE timestamp = ? '
-#                                               . 'ORDER BY schedule_id');
-#                    $tth->execute($row->{timestamp});
-#                    $ooo = $tth->fetchall_arrayref();
-#                    say "slice entries after: " . Dumper($ooo) if $gCfg{debug};
-
-                    $rescheduled = 1;
-                }
-                if ($rescheduled) {
-#                    say "rescheduling " . $row->{actiontype} . " for " . $row->{parentphys} if $gCfg{debug};
-                    ++$startover_count;
-                    goto STARTOVER;
-                }
-            }
-
-            $parentpath = $giti->{$row->{parentphys}};
-            $path = ($row->{itemtype} == VSS_PROJECT)
-                ? File::Spec->catdir($parentpath, $row->{itemname})
-                : File::Spec->catfile($parentpath, $row->{itemname});
-        } else {
-            # presumably this is a child entry
-            # pick a path to update
-
-            if (defined $row->{physname}
-                && defined $giti->{$row->{physname}}) {
-                $path = @{$giti->{$row->{physname}}}[0];
-                $parentpath = dirname($path);
-            }
-        }
-
-        &UpdateGitRepository($row, $parentpath, $path, $giti, 1, undef);
-    }
-    say "done scheduling -- " . (scalar @$rows) . " rows" if $gCfg{debug};
-}
-
 
 ###############################################################################
 #  CheckAffinity
@@ -2851,7 +2644,7 @@ sub RmProject {
 
 # invoke git one action at a time
 sub UpdateGitRepository {
-    my($row, $parentpath, $path, $git_image, $simulated, $repo) = @_;
+    my($row, $parentpath, $path, $git_image, $repo) = @_;
 
     my @delete_actions = (ACTION_DELETE, ACTION_DESTROY);
     my @restore_actions = (ACTION_RESTORE, ACTION_RESTOREDPROJECT);
@@ -2861,11 +2654,7 @@ sub UpdateGitRepository {
         when (VSS_PROJECT) {
             for ($row->{actiontype}) {
                 when (ACTION_ADD) {
-                    if ($simulated) {
-                        if (!defined $git_image->{$row->{physname}}) {
-                            $git_image->{$row->{physname}} = $path;
-                        }
-                    } elsif (! -d $path) {
+                    if (! -d $path) {
                         make_path($path);
                         if (!copy($gCfg{keepFile}, $path)) {
                             warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_PROJECT]} copy $!";
@@ -2883,7 +2672,7 @@ sub UpdateGitRepository {
                 }
                 when (ACTION_RENAME) {
                     my $newpath = File::Spec->catdir($parentpath, $row->{info});
-                    &DoMoveProject($repo, $path, $newpath, $git_image, $simulated, 1);
+                    &DoMoveProject($repo, $path, $newpath, $git_image, 1);
                 }
                 when (ACTION_MOVE_TO) {
                     # physname directory inode to move
@@ -2891,7 +2680,7 @@ sub UpdateGitRepository {
                     # info destination directory path
                     my $newpath = File::Spec->catdir($gCfg{repo}, $row->{info});
 
-                    &DoMoveProject($repo, $path, $newpath, $git_image, $simulated, 1);
+                    &DoMoveProject($repo, $path, $newpath, $git_image, 1);
                 }
                 when (ACTION_MOVE_FROM) {
                     # physname moved directory inode
@@ -2899,21 +2688,19 @@ sub UpdateGitRepository {
                     # info source directory path
                     my $oldpath = File::Spec->catdir($gCfg{repo}, $row->{info});
 
-                    &DoMoveProject($repo, $oldpath, $path, $git_image, $simulated, 0);
+                    &DoMoveProject($repo, $oldpath, $path, $git_image, 0);
                 }
                 when (@delete_actions) {
-                    if ($simulated) {
-                        &RmProject($path, $git_image);
-                    } elsif (-d $path) {
+                    if (-d $path) {
                         &RmProject($path, $git_image);
                         &GitRm($repo, $parentpath, $path, $row->{itemtype}, $row->{actiontype}, $row->{action_id});
                     }
                 }
                 when (ACTION_RECOVER) {
-                    &GitRecover($repo, $row, $path, $git_image, $simulated);
+                    &GitRecover($repo, $row, $path, $git_image);
                 }
                 when (ACTION_LABEL) {
-                    &DeferLabel($row, $repo, $simulated);
+                    &DeferLabel($row, $repo);
                 }
             }
         }
@@ -2922,11 +2709,7 @@ sub UpdateGitRepository {
                 when (ACTION_ADD) {
                     # recorded in both the parent and child
                     if ($row->{parentdata}) {
-                        if ($simulated) {
-                            if (!defined $git_image->{$row->{physname}}) {
-                                @{$git_image->{$row->{physname}}} = ("$path"); # may be on multiple paths
-                            }
-                        } elsif (! -f $path) {
+                        if (! -f $path) {
                             # In the case of a destroyed file there's only the parent record
                             # we'll go ahead and add the file in case the child record is blown away
                             # by something.
@@ -2958,13 +2741,11 @@ sub UpdateGitRepository {
 
                         if (defined $efile) {
                             # copy the data to the link
-                            if (!$simulated) {
-                                if (!copy($efile, $link_file)) {
-                                    warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
-                                } else {
-                                    $repo->logrun(add => '--',  $path);
-                                    &RemoveKeep($repo, $parentpath);
-                                }
+                            if (!copy($efile, $link_file)) {
+                                warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
+                            } else {
+                                $repo->logrun(add => '--',  $path);
+                                &RemoveKeep($repo, $parentpath);
                             }
                         }
                     } else {
@@ -2977,13 +2758,10 @@ sub UpdateGitRepository {
 
                         if (defined $efile) {
                             # copy the data to the link
-                            if (!$simulated) {
-                                if (!copy($efile, $link_file)) {
-                                    warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' link path `$link_file' copy $!";
-                                }
+                            if (!copy($efile, $link_file)) {
+                                warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' link path `$link_file' copy $!";
                             }
                         }
-
                     }
                 }
                 when (ACTION_RENAME) {
@@ -2991,7 +2769,7 @@ sub UpdateGitRepository {
                     # Files may be renamed after DELETE(!) through a SHARE apparently
                     # so we need to check for their existence
                     my $newpath = File::Spec->catfile($parentpath, $row->{info});
-                    if (!$simulated && -f $path) {
+                    if (-f $path) {
                         # check for renames involving case only
                         if ($path =~ /^\Q$newpath\E$/i) {
                             my $tmp_mv = File::Spec->catfile(dirname($path), MOVE_TMP_FILE);
@@ -3010,12 +2788,7 @@ sub UpdateGitRepository {
                     # these are only recorded in the parent
                     my $path_re = qr/^\Q$path\E$/;
 
-                    if ($simulated) {
-                        @{$git_image->{$row->{physname}}} = grep {!/$path_re/} @{$git_image->{$row->{physname}}};
-                        if (scalar @{$git_image->{$row->{physname}}} == 0) {
-                            delete $git_image->{$row->{physname}};
-                        }
-                    } elsif (-f $path) {
+                    if (-f $path) {
                         @{$git_image->{$row->{physname}}} = grep {!/$path_re/} @{$git_image->{$row->{physname}}};
 
                         if (scalar @{$git_image->{$row->{physname}}} == 0) {
@@ -3026,7 +2799,7 @@ sub UpdateGitRepository {
                     }
                 }
                 when (ACTION_RECOVER) {
-                    &GitRecover($repo, $row, $path, $git_image, $simulated);
+                    &GitRecover($repo, $row, $path, $git_image);
                 }
                 when (@restore_actions) {
                     # XXX need example
@@ -3040,12 +2813,10 @@ sub UpdateGitRepository {
                     if (defined $newver) {
                         my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
 
-                        if (!$simulated) {
-                            if (!copy($newver, $link_file)) {
-                                warn "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} newver `$newver' path `$link_file' copy $!";
-                            } else {
-                                $repo->logrun(add => '--',  $path);
-                            }
+                        if (!copy($newver, $link_file)) {
+                            warn "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} newver `$newver' path `$link_file' copy $!";
+                        } else {
+                            $repo->logrun(add => '--',  $path);
                         }
                     }
                 }
@@ -3053,9 +2824,7 @@ sub UpdateGitRepository {
                     # only recorded in parent (but present in child XML)
                     my $oldpath = &SearchForPath($row->{physname}, $git_image);
 
-                    if ($simulated) {
-                        push @{$git_image->{$row->{physname}}}, $path;
-                    } elsif (! -f $path) {
+                    if (! -f $path) {
                         link $oldpath, $path;
                         push @{$git_image->{$row->{physname}}}, $path;
                         $repo->logrun(add => '--',  $path);
@@ -3069,20 +2838,16 @@ sub UpdateGitRepository {
 
                     if ($row->{parentdata}) {
                         # set up bindings for the new branch
-                        if ($simulated) {
-                            @{$git_image->{$row->{physname}}} = ("$path");
+                        my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
+                        my $p = ((-f $link_info) ? $link_info : $path);
+                        if (!copy($p, $link_file)) { # should create new file
+                            warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$p' link `$link_file' copy $!";
                         } else {
-                            my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
-                            my $p = ((-f $link_info) ? $link_info : $path);
-                            if (!copy($p, $link_file)) { # should create new file
-                                warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$p' link `$link_file' copy $!";
-                            } else {
-                                unlink $path; # decrement any link count
-                                link $link_file, $path; # add $path as the new link
-                                @{$git_image->{$row->{physname}}} = ("$path");
-                            }
-                            # shouldn't need to 'git add', it's a file with the same contents
+                            unlink $path; # decrement any link count
+                            link $link_file, $path; # add $path as the new link
+                            @{$git_image->{$row->{physname}}} = ("$path");
                         }
+                        # shouldn't need to 'git add', it's a file with the same contents
 
                         # remove bindings for the old one
                         my $path_re = qr/^\Q$path\E$/;
@@ -3095,10 +2860,8 @@ sub UpdateGitRepository {
                         # for some reason, the parent info is missing
                         # no parent info to link, just copy the link file
                         my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
-                        if (!$simulated) {
-                            if (!copy($link_info, $link_file)) { # should create new file
-                                warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} info `$link_info' link `$link_file' copy $!";
-                            }
+                        if (!copy($link_info, $link_file)) { # should create new file
+                            warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} info `$link_info' link `$link_file' copy $!";
                         }
                     }
                 }
@@ -3114,21 +2877,19 @@ sub UpdateGitRepository {
                         # Find the old version and copy it over...
                         my $efile = &ExportVssPhysFile($row->{physname}, $row->{version});
                         $link_file .= $row->{version};
-                        if (defined $efile && !$simulated && ! -f $link_file) {
+                        if (defined $efile && ! -f $link_file) {
                             if (!copy($efile, $link_file)) {
                                 warn "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
                             }
                         }
                     }
 
-                    if (!$simulated) {
-                        unlink $path if -f $path; # get rid of pinned/unpinned file
-                        link $link_file, $path;
-                        $repo->logrun(add => '--',  $path);
-                    }
+                    unlink $path if -f $path; # get rid of pinned/unpinned file
+                    link $link_file, $path;
+                    $repo->logrun(add => '--',  $path);
                 }
                 when (ACTION_LABEL) {
-                    &DeferLabel($row, $repo, $simulated);
+                    &DeferLabel($row, $repo);
                 }
             }
         }
@@ -3262,32 +3023,30 @@ sub GitCommit {
 
 # defer labeling until git master is complete
 sub DeferLabel {
-    my($row, $repo, $simulated) = @_;
+    my($row, $repo) = @_;
 
-    if (!$simulated) {
-        my @pa_ary;
-        foreach my $param (@physical_action_params) {
-            push @pa_ary, keys %$param;
-        }
-        my $pa_params_sql = join q{,}, @pa_ary;
-
-        # Copy it to the label table and remove it from the schedule
-        my $sth = $gCfg{dbh}->prepare("INSERT INTO PhysicalActionLabel "
-                                      . "SELECT NULL AS schedule_id, action_id, $pa_params_sql "
-                                      . "FROM PhysicalActionSchedule "
-                                      . "WHERE schedule_id = ?");
-        $sth->execute($row->{schedule_id});
-        my $sid = $gCfg{dbh}->last_insert_id("","","","");
-        $sth = $gCfg{dbh}->prepare('DELETE FROM PhysicalActionSchedule WHERE schedule_id = ?');
-        $sth->execute($row->{schedule_id});
-
-        # bookmark HEAD and associate it with the label
-        my $head_id = $repo->logrun('rev-parse' => 'HEAD');
-        my $giti = nfreeze \%git_image;
-        $sth = $gCfg{dbh}->prepare('INSERT INTO LabelBookmark (label_id, schedule_id, head_id, git_image) '
-                                   .'VALUES (NULL, ?, ?, ?)');
-        $sth->execute($sid, $head_id, $giti);
+    my @pa_ary;
+    foreach my $param (@physical_action_params) {
+        push @pa_ary, keys %$param;
     }
+    my $pa_params_sql = join q{,}, @pa_ary;
+
+    # Copy it to the label table and remove it from the schedule
+    my $sth = $gCfg{dbh}->prepare("INSERT INTO PhysicalActionLabel "
+                                  . "SELECT NULL AS schedule_id, action_id, $pa_params_sql "
+                                  . "FROM PhysicalActionSchedule "
+                                  . "WHERE schedule_id = ?");
+    $sth->execute($row->{schedule_id});
+    my $sid = $gCfg{dbh}->last_insert_id("","","","");
+    $sth = $gCfg{dbh}->prepare('DELETE FROM PhysicalActionSchedule WHERE schedule_id = ?');
+    $sth->execute($row->{schedule_id});
+
+    # bookmark HEAD and associate it with the label
+    my $head_id = $repo->logrun('rev-parse' => 'HEAD');
+    my $giti = nfreeze \%git_image;
+    $sth = $gCfg{dbh}->prepare('INSERT INTO LabelBookmark (label_id, schedule_id, head_id, git_image) '
+                               .'VALUES (NULL, ?, ?, ?)');
+    $sth->execute($sid, $head_id, $giti);
 }
 
 # create or checkout a branch for a label and add files to it from master
@@ -3317,11 +3076,9 @@ sub GitLabel {
 
 # handle different kinds of moves
 sub DoMoveProject {
-    my($repo, $path, $newpath, $git_image, $simulated, $newtest) = @_;
+    my($repo, $path, $newpath, $git_image, $newtest) = @_;
 
-    if ($simulated) {
-        &MoveProject($path, $newpath, $git_image);
-    } elsif ($newtest ? (! -d $newpath) : (-d $path)) {
+    if ($newtest ? (! -d $newpath) : (-d $path)) {
         if ($path =~ /^\Q$newpath\E$/i) {
             my $tmp_mv = File::Spec->catdir(dirname($path), MOVE_TMP_FILE);
             $repo->logrun(mv =>  $path,  $tmp_mv);
@@ -3345,7 +3102,7 @@ sub RemoveKeep {
 
 # handle the recover
 sub GitRecover {
-    my($repo, $row, $path, $git_image, $simulated) = @_;
+    my($repo, $row, $path, $git_image) = @_;
 
     my ($action_id) = $gCfg{dbh}->selectrow_array("SELECT action_id "
                                                   . "FROM PhysicalAction "
@@ -3362,20 +3119,7 @@ sub GitRecover {
                                                        . " AND timestamp < ?)",
                                                        undef, $row->{physname}, $row->{physname}, $row->{timestamp});
 
-    if ($simulated) {
-        for ($row->{itemtype}) {
-            when (VSS_PROJECT) {
-                if (!$action_id && defined $action_id_del) {
-                    $git_image->{$row->{physname}} = $path;
-                }
-            }
-            when (VSS_FILE) {
-                if ((!$action_id && defined $action_id_del) || $action_id) {
-                    @{$git_image->{$row->{physname}}} = ("$path");
-                }
-            }
-        }
-    } elsif (! -e $path) {
+    if (! -e $path) {
         for ($row->{itemtype}) {
             when (VSS_PROJECT) {
                 if (!$action_id) {
