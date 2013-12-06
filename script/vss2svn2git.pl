@@ -212,7 +212,6 @@ my @physical_action_params = (
     { 'itemtype' =>    'INTEGER' },
     { 'timestamp' =>   'INTEGER' },
     { 'author' =>      'VARCHAR' },
-    { 'is_binary' =>   'INTEGER' },
     { 'info' =>        'VARCHAR' },
     { 'priority' =>    'INTEGER' },
     { 'parentdata' =>  'INTEGER' },
@@ -487,21 +486,24 @@ sub GetVssPhysInfo {
         return;
     }
 
+    my @versions = $xmldoc->findnodes('File/Version');
+
     for ($type+0) {
         when (VSS_PROJECT) {
             $parentphys = $xmldoc->findvalue('File/ItemInfo/ParentPhys');
         }
-        when (VSS_FILE) { $parentphys = undef; }
+        when (VSS_FILE) {
+            $parentphys = undef;
+            $gCfg{dbh}->do('INSERT INTO FileBinary (physname, is_binary) VALUES (?, ?)', undef, uc($physname), $binary);
+        }
         default {
             &ThrowWarning("Can't handle file '$physname'; not a project or file\n");
             return;
         }
     }
 
-    my @versions = $xmldoc->findnodes('File/Version');
-
     if (scalar @versions > 0) {
-        &GetVssItemVersions($physname, $parentphys, \@versions, $type, $binary);
+        &GetVssItemVersions($physname, $parentphys, \@versions, $type);
     }
 
 }  #  End GetVssPhysInfo
@@ -510,11 +512,11 @@ sub GetVssPhysInfo {
 #  GetVssItemVersions
 ###############################################################################
 sub GetVssItemVersions {
-    my($physname, $parentphys, $versions, $ii_type, $ii_binary) = @_;
+    my($physname, $parentphys, $versions, $ii_type) = @_;
 
     my($parentdata, $version, $vernum, $actionid, $actiontype,
        $tphysname, $itemname, $itemtype, $parent, $user, $timestamp, $comment,
-       $is_binary, $info, $priority, $label, $cachename);
+       $info, $priority, $label, $cachename);
 
     my @pa_list = ();
     my $last_timestamp = 0;
@@ -554,7 +556,7 @@ sub GetVssItemVersions {
         PinnedFile => {type => VSS_FILE, action => ACTION_PIN},
         RollBack => {type => VSS_FILE, action => ACTION_BRANCH},
         UnpinnedFile => {type => VSS_FILE, action => ACTION_PIN},
-        Labeled => {type => VSS_FILE, action => ACTION_LABEL},
+        Labeled => {type => $ii_type, action => ACTION_LABEL},
         );
 
     my $namelookup = $gCfg{dbh}->selectall_hashref('SELECT offset, name FROM NameLookup',
@@ -612,7 +614,6 @@ VERSION:
         }
 
         $comment = undef;
-        $is_binary = 0;
         $info = undef;
         $parentdata = 0;
         $label = undef;
@@ -621,11 +622,6 @@ VERSION:
             $comment = $version->findvalue('Comment') || undef;
         }
 
-        # In case of Label the itemtype is the type of the item currently
-        # under investigation
-        if ($actiontype eq ACTION_LABEL) {
-            $itemtype = $ii_type;
-        }
         # we can have label actions and labels attached to versions
         if ($version->exists('Action/Label')) {
             $label = $version->findvalue('Action/Label');
@@ -668,10 +664,6 @@ VERSION:
             # actually this (project) item
 
             $parentphys = $physname;
-        }
-
-        if ($itemtype == VSS_FILE) {
-            $is_binary = $ii_binary;
         }
 
         for ($actiontype) {
@@ -720,7 +712,7 @@ VERSION:
 
 
         push @pa_list, $tphysname, $vernum, $parentphys, $actiontype, $itemname,
-        $itemtype, $timestamp, $user, $is_binary, $info, $priority,
+        $itemtype, $timestamp, $user, $info, $priority,
         $parentdata, $label, $comment;
 
         # Handle version labels as a secondary action for the same version
@@ -740,7 +732,7 @@ VERSION:
                 $labelComment = "assigned label '$vlabel' to version $vernum of physical file '$tphysname'";
             }
             push @pa_list, $tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
-            $itemtype, $timestamp, $user, $is_binary, $info, PA_PRIORITY_MIN,
+            $itemtype, $timestamp, $user, $info, PA_PRIORITY_MIN,
             $parentdata, $vlabel, $labelComment;
         }
 
@@ -1748,6 +1740,17 @@ CREATE TABLE
     NameLookup (
         offset      INTEGER PRIMARY KEY,
         name        VARCHAR
+    )
+EOSQL
+
+    $gCfg{dbh}->do($sql);
+
+    # FileBinary contains VSS is_binary types for VSS_FILES
+    $sql = <<"EOSQL";
+CREATE TABLE
+    FileBinary (
+        physname  VARCHAR NOT NULL PRIMARY KEY,
+        is_binary INTEGER
     )
 EOSQL
 
