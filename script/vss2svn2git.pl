@@ -214,7 +214,6 @@ my @physical_action_params = (
     { 'info' =>        'VARCHAR' },
     { 'priority' =>    'INTEGER' },
     { 'parentdata' =>  'INTEGER' },
-    { 'label' =>       'VARCHAR' },
     { 'comment' =>     'TEXT' },
     );
 
@@ -433,6 +432,7 @@ sub GetPhysVssHistory {
                                . "ORDER BY physname LIMIT @{[PHYSICAL_FILES_LIMIT]}");
     my $pt_sth = $gCfg{dbh}->prepare('INSERT OR IGNORE INTO PhysItemtype (physname, itemtype) VALUES (?, ?)');
     my $b_sth = $gCfg{dbh}->prepare('INSERT INTO FileBinary (physname, is_binary) VALUES (?, ?)');
+    my $li_sth = $gCfg{dbh}->prepare('INSERT INTO PhysLabel (action_id, label) VALUES (?, ?)');
 
     my $pa_sth;
     {
@@ -454,7 +454,7 @@ sub GetPhysVssHistory {
             my $row;
             while (defined($row = $sth->fetchrow_hashref() )) {
                 $physname = $row->{physname};
-                &GetVssPhysInfo($row->{datapath}, $physname, $pa_sth, $pt_sth, $b_sth);
+                &GetVssPhysInfo($row->{datapath}, $physname, $pa_sth, $pt_sth, $b_sth, $li_sth);
                 ++$limcount;
             }
         };
@@ -480,7 +480,7 @@ sub GetPhysVssHistory {
 #  GetVssPhysInfo
 ###############################################################################
 sub GetVssPhysInfo {
-    my($datapath, $physname, $pa_sth, $pt_sth, $b_sth) = @_;
+    my($datapath, $physname, $pa_sth, $pt_sth, $b_sth, $li_sth) = @_;
 
     say "datapath: \"$datapath\"" if $gCfg{debug};
     my @cmd = ('info', "-e$gCfg{encoding}", "$datapath");
@@ -517,7 +517,7 @@ sub GetVssPhysInfo {
     $pt_sth->execute(uc($physname), $type+0);
 
     if (scalar @versions > 0) {
-        &GetVssItemVersions($physname, $parentphys, \@versions, $type, $pa_sth, $pt_sth);
+        &GetVssItemVersions($physname, $parentphys, \@versions, $type, $pa_sth, $pt_sth, $li_sth);
     }
 
 }  #  End GetVssPhysInfo
@@ -526,7 +526,7 @@ sub GetVssPhysInfo {
 #  GetVssItemVersions
 ###############################################################################
 sub GetVssItemVersions {
-    my($physname, $parentphys, $versions, $ii_type, $pa_sth, $pt_sth) = @_;
+    my($physname, $parentphys, $versions, $ii_type, $pa_sth, $pt_sth, $li_sth) = @_;
 
     my($parentdata, $version, $vernum, $actionid, $actiontype,
        $tphysname, $itemname, $itemtype, $parent, $user, $timestamp, $comment,
@@ -702,8 +702,6 @@ VERSION:
             }
         }
 
-
-
         # since there is no corresponding client action for PIN, we need to
         # enter the concrete version number here manually
         # In a share action the pinnedToVersion attribute can also be set
@@ -725,7 +723,14 @@ VERSION:
         $pt_sth->execute($tphysname, $itemtype);
         $pa_sth->execute($tphysname, $vernum, $parentphys, $actiontype, $itemname,
                          $timestamp, $user, $info, $priority,
-                         $parentdata, $label, $comment);
+                         $parentdata, $comment);
+
+        # attach label data
+        my $linsert;
+        if ($actiontype eq ACTION_LABEL) {
+            $linsert = $gCfg{dbh}->last_insert_id("","","","");
+            $li_sth->execute($linsert, $label // '');
+        }
 
         # Handle version labels as a secondary action for the same version
         # version labels and label action use the same location to store the
@@ -747,7 +752,9 @@ VERSION:
             $pt_sth->execute($tphysname, $itemtype);
             $pa_sth->execute($tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
                              $timestamp, $user, $info, PA_PRIORITY_MIN,
-                             $parentdata, $vlabel, $labelComment);
+                             $parentdata, $labelComment);
+            $linsert = $gCfg{dbh}->last_insert_id("","","","");
+            $li_sth->execute($linsert, $vlabel // '');
         }
     }
 }  #  End GetVssItemVersions
@@ -1022,6 +1029,7 @@ sub ReplayLabels {
 
     $uth = $gCfg{dbh}->prepare('SELECT head_id, git_image FROM LabelBookmark WHERE schedule_id = ?');
     my $it_sth = $gCfg{dbh}->prepare('SELECT itemtype FROM PhysItemtype WHERE physname = ?');
+    my $l_sth = $gCfg{dbh}->prepare('SELECT label FROM PhysLabel WHERE action_id = ?');
 
     my $first_label = 0;
     while (defined $last_time && $last_time < $gCfg{maxtime}) {
@@ -1060,6 +1068,9 @@ sub ReplayLabels {
             my ($path, $parentpath);
 
             if ($dump_cnt == 0) {
+                $l_sth->execute($row->{action_id});
+                ($row->{label}) = $l_sth->fetchrow_array();
+
                 my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
 
                 if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
@@ -1829,6 +1840,17 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
+    # PhysLabel contains label data for LABEL actions
+    $sql = <<"EOSQL";
+CREATE TABLE
+    PhysLabel (
+        action_id   INTEGER PRIMARY KEY,
+        label TEXT NOT NULL
+    )
+EOSQL
+
+    $gCfg{dbh}->do($sql);
+
     # The PhysicalActionLabel table stores PhysicalActionSchedule
     # label actions which must be deferred until after the master
     # branch is built, because not doing so breaks the model for shared
@@ -2428,15 +2450,14 @@ sub UpdateRowAffinity {
     }
 
     if ($lrow->{actiontype} eq ACTION_LABEL) {
-        $gCfg{dbh}->do("UPDATE tmp_affinity SET affinity = affinity+$direction WHERE actiontype = '@{[ACTION_LABEL]}'");
-
+        ($lrow->{label}) = $gCfg{dbh}->selectrow_array('SELECT label FROM PhysLabel WHERE action_id = ?',
+                                                       undef, $lrow->{action_id});
         if (defined $lrow->{label}) {
-            $rth = $gCfg{dbh}->prepare("UPDATE tmp_affinity SET affinity = affinity+$direction "
-                                       . "WHERE actiontype = '@{[ACTION_LABEL]}' AND label = ?");
+            my $d2 = $direction*2; # more heavily weight these
+            $rth = $gCfg{dbh}->prepare("UPDATE tmp_affinity SET affinity = affinity+$d2 "
+                                       . "WHERE actiontype = '@{[ACTION_LABEL]}' "
+                                       . "AND action_id IN (SELECT action_id FROM PhysLabel WHERE label = ?)");
             $rth->execute($lrow->{label});
-        } else {
-            $gCfg{dbh}->do("UPDATE tmp_affinity SET affinity = affinity+$direction "
-                                . "WHERE actiontype = '@{[ACTION_LABEL]}' AND label IS NULL");
         }
     }
  }
@@ -2543,22 +2564,20 @@ sub GetOneChangeset {
     &GetOneChangesetLog("scheduling label pre ", $schedule_id, $dbgsql) if $gCfg{debug};
 
     # dump all entries incuding and after the first mismatch of labels
-    # N.B. labels may be NULL
     # Again, it's at least two labels. Even though there are no changes,
     # in a label how we are handling labels makes separating differing
     # labels into a changeset important.
     # This should be sufficient to isolate LABEL actions, since other
     # actions won't have label data.
     ($schedule_id) = $gCfg{dbh}->selectrow_array("SELECT MIN(B.schedule_id) "
-                                                 . "FROM (SELECT actiontype, label FROM PhysicalActionSchedule "
-                                                 . "      ORDER BY schedule_id LIMIT 1) AS A "
-                                                 . "CROSS JOIN (SELECT schedule_id, actiontype, label "
-                                                 . "            FROM PhysicalActionSchedule) AS B "
-                                                 . "WHERE A.actiontype = '@{[ACTION_LABEL]}' "
-                                                 . "AND B.actiontype = '@{[ACTION_LABEL]}' "
-                                                 . "AND (A.label IS NULL AND B.label IS NOT NULL "
-                                                 . "     OR A.label IS NOT NULL AND B.label IS NULL "
-                                                 . "     OR A.label IS NOT NULL AND B.label IS NOT NULL AND A.label != B.label)");
+                                                 . "FROM (SELECT X.actiontype AS actiontype, Y.label AS label "
+                                                 . "      FROM PhysicalActionSchedule AS X, PhysLabel AS Y "
+                                                 . "      WHERE X.action_id = Y.action_id "
+                                                 . "      ORDER BY X.schedule_id LIMIT 1) AS A "
+                                                 . "CROSS JOIN (SELECT X.schedule_id AS schedule_id, X.actiontype AS actiontype, Y.label AS label "
+                                                 . "            FROM PhysicalActionSchedule AS X, PhysLabel AS Y "
+                                                 . "            WHERE X.action_id = Y.action_id) AS B "
+                                                 . "WHERE A.label != B.label");
     if ($schedule_id) {
         $isth->execute($schedule_id);
         $dsth->execute($schedule_id);
@@ -3073,7 +3092,9 @@ sub DeferLabel {
 # create or checkout a branch for a label and add files to it from master
 sub GitLabel {
     my($row, $repo, $head_id, $paths) = @_;
-
+    
+    ($row->{label}) = $gCfg{dbh}->selectrow_array('SELECT label FROM PhysLabel WHERE action_id = ?',
+                                                  undef, $row->{action_id});
     my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
 
     # copy each path into the label
