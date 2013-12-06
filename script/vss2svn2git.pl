@@ -431,6 +431,20 @@ sub GetPhysVssHistory {
     my $sth = $gCfg{dbh}->prepare("SELECT * FROM Physical "
                                . "WHERE physname > ? "
                                . "ORDER BY physname LIMIT @{[PHYSICAL_FILES_LIMIT]}");
+    my $pt_sth = $gCfg{dbh}->prepare('INSERT OR IGNORE INTO PhysItemtype (physname, itemtype) VALUES (?, ?)');
+    my $b_sth = $gCfg{dbh}->prepare('INSERT INTO FileBinary (physname, is_binary) VALUES (?, ?)');
+
+    my $pa_sth;
+    {
+        my @pa_ary;
+        foreach my $param (@physical_action_params) {
+            push @pa_ary, keys %$param;
+        }
+        my $pa_params_sql = join q{,}, @pa_ary;
+        my $val_params = join q{,}, ('?') x (scalar @pa_ary);
+        $pa_sth = $gCfg{dbh}->prepare("INSERT INTO PhysicalAction (action_id, $pa_params_sql) VALUES (NULL, $val_params)");
+    }
+
     do {
         $sth->execute($physname);
 
@@ -440,7 +454,7 @@ sub GetPhysVssHistory {
             my $row;
             while (defined($row = $sth->fetchrow_hashref() )) {
                 $physname = $row->{physname};
-                &GetVssPhysInfo($row->{datapath}, $physname);
+                &GetVssPhysInfo($row->{datapath}, $physname, $pa_sth, $pt_sth, $b_sth);
                 ++$limcount;
             }
         };
@@ -466,7 +480,7 @@ sub GetPhysVssHistory {
 #  GetVssPhysInfo
 ###############################################################################
 sub GetVssPhysInfo {
-    my($datapath, $physname) = @_;
+    my($datapath, $physname, $pa_sth, $pt_sth, $b_sth) = @_;
 
     say "datapath: \"$datapath\"" if $gCfg{debug};
     my @cmd = ('info', "-e$gCfg{encoding}", "$datapath");
@@ -493,17 +507,17 @@ sub GetVssPhysInfo {
         }
         when (VSS_FILE) {
             $parentphys = undef;
-            $gCfg{dbh}->do('INSERT INTO FileBinary (physname, is_binary) VALUES (?, ?)', undef, uc($physname), $binary);
+            $b_sth->execute(uc($physname), $binary);
         }
         default {
             &ThrowWarning("Can't handle file '$physname'; not a project or file\n");
             return;
         }
     }
-    $gCfg{dbh}->do('INSERT OR IGNORE INTO PhysItemtype (physname, itemtype) VALUES (?, ?)', undef, uc($physname), $type+0);
+    $pt_sth->execute(uc($physname), $type+0);
 
     if (scalar @versions > 0) {
-        &GetVssItemVersions($physname, $parentphys, \@versions, $type);
+        &GetVssItemVersions($physname, $parentphys, \@versions, $type, $pa_sth, $pt_sth);
     }
 
 }  #  End GetVssPhysInfo
@@ -512,14 +526,12 @@ sub GetVssPhysInfo {
 #  GetVssItemVersions
 ###############################################################################
 sub GetVssItemVersions {
-    my($physname, $parentphys, $versions, $ii_type) = @_;
+    my($physname, $parentphys, $versions, $ii_type, $pa_sth, $pt_sth) = @_;
 
     my($parentdata, $version, $vernum, $actionid, $actiontype,
        $tphysname, $itemname, $itemtype, $parent, $user, $timestamp, $comment,
        $info, $priority, $label, $cachename);
 
-    my @pa_list = ();
-    my @pt_list = ();
     my $last_timestamp = 0;
     # RollBack is only seen in combiation with a BranchFile activity, so actually
     # RollBack is the item view on the activity and BranchFile is the parent side
@@ -710,10 +722,10 @@ VERSION:
             }
         }
 
-        push @pt_list, $tphysname, $itemtype;
-        push @pa_list, $tphysname, $vernum, $parentphys, $actiontype, $itemname,
-        $timestamp, $user, $info, $priority,
-        $parentdata, $label, $comment;
+        $pt_sth->execute($tphysname, $itemtype);
+        $pa_sth->execute($tphysname, $vernum, $parentphys, $actiontype, $itemname,
+                         $timestamp, $user, $info, $priority,
+                         $parentdata, $label, $comment);
 
         # Handle version labels as a secondary action for the same version
         # version labels and label action use the same location to store the
@@ -732,54 +744,13 @@ VERSION:
                 $labelComment = "assigned label '$vlabel' to version $vernum of physical file '$tphysname'";
             }
 
-            push @pt_list, $tphysname, $itemtype;
-            push @pa_list, $tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
-            $timestamp, $user, $info, PA_PRIORITY_MIN,
-            $parentdata, $vlabel, $labelComment;
-        }
-
-        if (scalar @pa_list >= PA_PARAMS_LIMIT*(scalar @physical_action_params)) {
-            &LoadUpPhysActionInfo(\@pa_list);
-            &LoadUpPhysItemtype(\@pt_list);
-            @pa_list = ();
-            @pt_list = ();
+            $pt_sth->execute($tphysname, $itemtype);
+            $pa_sth->execute($tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
+                             $timestamp, $user, $info, PA_PRIORITY_MIN,
+                             $parentdata, $vlabel, $labelComment);
         }
     }
-
-    if (scalar @pa_list > 0) {
-        &LoadUpPhysActionInfo(\@pa_list);
-        &LoadUpPhysItemtype(\@pt_list);
-        @pa_list = ();
-        @pt_list = ();
-    }
-
 }  #  End GetVssItemVersions
-
-sub LoadUpPhysItemtype {
-    my($pt_list) = @_;
-
-    my $val_clause = join q{,}, ('(?, ?)') x ((scalar @{$pt_list})/2);
-    my $sql = "INSERT OR IGNORE INTO PhysItemtype (physname, itemtype) VALUES $val_clause";
-
-    my $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute(@{$pt_list});
-}
-
-sub LoadUpPhysActionInfo {
-    my($pa_list) = @_;
-
-    my @pa_ary;
-    foreach my $param (@physical_action_params) {
-        push @pa_ary, keys %$param;
-    }
-    my $pa_params_sql = join q{,}, @pa_ary;
-    my $val_params = join q{,}, ('?') x (scalar @pa_ary);
-    my $val_clause = join q{,}, ("(NULL, $val_params)") x ((scalar @{$pa_list})/(scalar @pa_ary));
-    my $sql = "INSERT INTO PhysicalAction (action_id, $pa_params_sql) VALUES $val_clause";
-
-    my $sth = $gCfg{dbh}->prepare($sql);
-    $sth->execute(@{$pa_list});
-}
 
 ###############################################################################
 #  GetItemName
