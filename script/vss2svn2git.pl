@@ -209,7 +209,6 @@ my @physical_action_params = (
     { 'parentphys' =>  'VARCHAR' },
     { 'actiontype' =>  'VARCHAR' },
     { 'itemname' =>    'VARCHAR' },
-    { 'itemtype' =>    'INTEGER' },
     { 'timestamp' =>   'INTEGER' },
     { 'author' =>      'VARCHAR' },
     { 'info' =>        'VARCHAR' },
@@ -501,6 +500,7 @@ sub GetVssPhysInfo {
             return;
         }
     }
+    $gCfg{dbh}->do('INSERT OR IGNORE INTO PhysItemtype (physname, itemtype) VALUES (?, ?)', undef, uc($physname), $type+0);
 
     if (scalar @versions > 0) {
         &GetVssItemVersions($physname, $parentphys, \@versions, $type);
@@ -519,6 +519,7 @@ sub GetVssItemVersions {
        $info, $priority, $label, $cachename);
 
     my @pa_list = ();
+    my @pt_list = ();
     my $last_timestamp = 0;
     # RollBack is only seen in combiation with a BranchFile activity, so actually
     # RollBack is the item view on the activity and BranchFile is the parent side
@@ -561,7 +562,6 @@ sub GetVssItemVersions {
 
     my $namelookup = $gCfg{dbh}->selectall_hashref('SELECT offset, name FROM NameLookup',
                                                    'offset');
-
 VERSION:
     foreach $version (@$versions) {
         $tphysname = $version->exists('Action/Physical')
@@ -710,9 +710,9 @@ VERSION:
             }
         }
 
-
+        push @pt_list, $tphysname, $itemtype;
         push @pa_list, $tphysname, $vernum, $parentphys, $actiontype, $itemname,
-        $itemtype, $timestamp, $user, $info, $priority,
+        $timestamp, $user, $info, $priority,
         $parentdata, $label, $comment;
 
         # Handle version labels as a secondary action for the same version
@@ -731,23 +731,39 @@ VERSION:
             else {
                 $labelComment = "assigned label '$vlabel' to version $vernum of physical file '$tphysname'";
             }
+
+            push @pt_list, $tphysname, $itemtype;
             push @pa_list, $tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
-            $itemtype, $timestamp, $user, $info, PA_PRIORITY_MIN,
+            $timestamp, $user, $info, PA_PRIORITY_MIN,
             $parentdata, $vlabel, $labelComment;
         }
 
         if (scalar @pa_list >= PA_PARAMS_LIMIT*(scalar @physical_action_params)) {
             &LoadUpPhysActionInfo(\@pa_list);
+            &LoadUpPhysItemtype(\@pt_list);
             @pa_list = ();
+            @pt_list = ();
         }
     }
 
     if (scalar @pa_list > 0) {
         &LoadUpPhysActionInfo(\@pa_list);
+        &LoadUpPhysItemtype(\@pt_list);
         @pa_list = ();
+        @pt_list = ();
     }
 
 }  #  End GetVssItemVersions
+
+sub LoadUpPhysItemtype {
+    my($pt_list) = @_;
+
+    my $val_clause = join q{,}, ('(?, ?)') x ((scalar @{$pt_list})/2);
+    my $sql = "INSERT OR IGNORE INTO PhysItemtype (physname, itemtype) VALUES $val_clause";
+
+    my $sth = $gCfg{dbh}->prepare($sql);
+    $sth->execute(@{$pt_list});
+}
 
 sub LoadUpPhysActionInfo {
     my($pa_list) = @_;
@@ -842,6 +858,8 @@ sub GitReadImage {
 
     $tth = $gCfg{dbh}->prepare('SELECT MIN(timestamp) FROM PhysicalAction WHERE timestamp > ?');
 
+    my $it_sth = $gCfg{dbh}->prepare('SELECT itemtype FROM PhysItemtype WHERE physname = ?');
+
     my $dump_cnt = 0;
     while ($last_time < $gCfg{maxtime}) {
         my ($username, $comment);
@@ -871,6 +889,9 @@ sub GitReadImage {
 #                }
 #            }
             ++$dump_cnt;
+
+            $it_sth->execute($row->{physname});
+            ($row->{itemtype}) = $it_sth->fetchrow_array();
 
             if (defined $row->{parentphys}) {
                 say "parentphys: $row->{parentphys} "
@@ -1029,6 +1050,7 @@ sub ReplayLabels {
                                . "AND actiontype = '@{[ACTION_LABEL]}'");
 
     $uth = $gCfg{dbh}->prepare('SELECT head_id, git_image FROM LabelBookmark WHERE schedule_id = ?');
+    my $it_sth = $gCfg{dbh}->prepare('SELECT itemtype FROM PhysItemtype WHERE physname = ?');
 
     my $first_label = 0;
     while (defined $last_time && $last_time < $gCfg{maxtime}) {
@@ -1094,6 +1116,9 @@ sub ReplayLabels {
 
             my ($head_id, $giti) = $uth->fetchrow_array();
             $giti = thaw($giti);
+
+            $it_sth->execute($row->{physname});
+            ($row->{itemtype}) = $it_sth->fetchrow_array();
 
             if (defined $row->{parentphys}) {
                 say "label parentphys: $row->{parentphys} "
@@ -1204,12 +1229,13 @@ DELETE FROM PhysicalAction WHERE action_id IN
 (SELECT action_id
  FROM PhysicalAction
  WHERE physname IN
- (SELECT physname
-  FROM PhysicalAction
-  WHERE actiontype = '@{[ACTION_ADD]}'
-  AND itemtype = @{[VSS_FILE]}
-  AND itemname LIKE '~sak%'
-  AND comment LIKE 'Temporary file created by Visual Studio%'))
+ (SELECT A.physname AS physname
+  FROM PhysicalAction AS A, PhysItemtype AS B
+  WHERE A.physname = B.physname
+  AND A.actiontype = '@{[ACTION_ADD]}'
+  AND B.itemtype = @{[VSS_FILE]}
+  AND A.itemname LIKE '~sak%'
+  AND A.comment LIKE 'Temporary file created by Visual Studio%'))
 EOSQL
 
     $gCfg{dbh}->do($sql);
@@ -1225,16 +1251,18 @@ EOSQL
 sub FixupParentActions {
     my $sql = <<"EOSQL";
 SELECT B.comment AS comment, A.action_id AS action_id
-FROM (SELECT physname, action_id
-      FROM PhysicalAction
-      WHERE itemtype = ?
-      AND parentdata != 0
-      AND actiontype = '@{[ACTION_ADD]}') AS A
-NATURAL JOIN (SELECT physname, comment
-              FROM PhysicalAction
-              WHERE itemtype = ?
-              AND parentdata = 0
-              AND actiontype = '@{[ACTION_ADD]}') AS B
+FROM (SELECT X.physname AS physname, X.action_id AS action_id
+      FROM PhysicalAction AS X, PhysItemtype AS Y
+      WHERE X.physname = Y.physname
+      AND Y.itemtype = ?
+      AND X.parentdata != 0
+      AND X.actiontype = '@{[ACTION_ADD]}') AS A
+NATURAL JOIN (SELECT X.physname AS physname, X.comment AS comment
+              FROM PhysicalAction AS X, PhysItemtype AS Y
+              WHERE X.physname = Y.physname
+              AND Y.itemtype = ?
+              AND X.parentdata = 0
+              AND X.actiontype = '@{[ACTION_ADD]}') AS B
 EOSQL
     my $sth = $gCfg{dbh}->prepare($sql);
     my $tth = $gCfg{dbh}->prepare('UPDATE PhysicalAction '
@@ -1266,16 +1294,18 @@ EOSQL
     # give each SHARE/BRANCH a little wiggle room timestamp-wise
     $sql = <<"EOSQL";
 SELECT B.comment AS comment, A.action_id AS action_id
-FROM (SELECT info, action_id, timestamp
-      FROM PhysicalAction
-      WHERE itemtype = @{[VSS_FILE]}
-      AND parentdata != 0
-      AND actiontype IN ('@{[ACTION_BRANCH]}', '@{[ACTION_SHARE]}')) AS A
-INNER JOIN (SELECT info, comment, timestamp
-              FROM PhysicalAction
-              WHERE itemtype = @{[VSS_FILE]}
-              AND parentdata = 0
-              AND actiontype = '@{[ACTION_BRANCH]}') AS B
+FROM (SELECT X.info AS info, X.action_id AS action_id, X.timestamp AS timestamp
+      FROM PhysicalAction AS X, PhysItemtype AS Y
+      WHERE X.physname = Y.physname
+      AND Y.itemtype = @{[VSS_FILE]}
+      AND X.parentdata != 0
+      AND X.actiontype IN ('@{[ACTION_BRANCH]}', '@{[ACTION_SHARE]}')) AS A
+INNER JOIN (SELECT X.info AS info, X.comment AS comment, X.timestamp AS timestamp
+              FROM PhysicalAction AS X, PhysItemtype AS Y
+              WHERE X.physname = Y.physname
+              AND Y.itemtype = @{[VSS_FILE]}
+              AND X.parentdata = 0
+              AND X.actiontype = '@{[ACTION_BRANCH]}') AS B
 ON A.info = B.info AND A.timestamp BETWEEN B.timestamp-@{[TIMESTAMP_DELTA]} AND B.timestamp+@{[TIMESTAMP_DELTA]}
 EOSQL
     $sth = $gCfg{dbh}->prepare($sql);
@@ -1309,22 +1339,25 @@ $sql = <<"EOSQL";
 DELETE FROM PhysicalAction
 WHERE action_id IN
 (SELECT C.action_id AS action_id
-FROM (SELECT physname, parentphys
-      FROM PhysicalAction
-      WHERE actiontype = '@{[ACTION_ADD]}'
-      AND parentdata != 0
-      AND itemtype = @{[VSS_PROJECT]}) AS A
-INNER JOIN (SELECT physname, parentphys
-            FROM PhysicalAction
-            WHERE actiontype = '@{[ACTION_MOVE_TO]}'
-            AND parentdata != 0
-            AND itemtype = @{[VSS_PROJECT]}) AS B
+FROM (SELECT X.physname AS physname, X.parentphys AS parentphys
+      FROM PhysicalAction AS X, PhysItemtype AS Y
+      WHERE X.physname = Y.physname
+      AND X.actiontype = '@{[ACTION_ADD]}'
+      AND X.parentdata != 0
+      AND Y.itemtype = @{[VSS_PROJECT]}) AS A
+INNER JOIN (SELECT X.physname AS physname, X.parentphys AS parentphys
+            FROM PhysicalAction AS X, PhysItemtype AS Y
+            WHERE X.physname = Y.physname
+            AND X.actiontype = '@{[ACTION_MOVE_TO]}'
+            AND X.parentdata != 0
+            AND Y.itemtype = @{[VSS_PROJECT]}) AS B
 USING (physname, parentphys)
-INNER JOIN (SELECT action_id, physname
-      FROM PhysicalAction
-      WHERE actiontype = '@{[ACTION_ADD]}'
-      AND parentdata = 0
-      AND itemtype = @{[VSS_PROJECT]}) AS C
+INNER JOIN (SELECT X.action_id AS action_id, X.physname AS physname
+      FROM PhysicalAction AS X, PhysItemtype AS Y
+      WHERE X.physname = Y.physname
+      AND X.actiontype = '@{[ACTION_ADD]}'
+      AND X.parentdata = 0
+      AND Y.itemtype = @{[VSS_PROJECT]}) AS C
 USING (physname))
 EOSQL
     $gCfg{dbh}->do($sql);
@@ -1751,6 +1784,17 @@ CREATE TABLE
     FileBinary (
         physname  VARCHAR NOT NULL PRIMARY KEY,
         is_binary INTEGER
+    )
+EOSQL
+
+    $gCfg{dbh}->do($sql);
+
+    # PhysItemtype contains VSS itemtypes (VSS_PROJECT, VSS_FILE)
+    $sql = <<"EOSQL";
+CREATE TABLE
+    PhysItemtype (
+        physname  VARCHAR NOT NULL PRIMARY KEY,
+        itemtype INTEGER
     )
 EOSQL
 
@@ -2555,13 +2599,14 @@ sub GetOneChangeset {
     # If the topmost scheduled action is one of the actions in the set
     # delete everything else from the schedule.  Otherwise if one is anywhere
     # else on the schedule, remove it and everything after it.
-    ($schedule_id) = $gCfg{dbh}->selectrow_array("SELECT MIN(CASE schedule_id "
+    ($schedule_id) = $gCfg{dbh}->selectrow_array("SELECT MIN(CASE X.schedule_id "
                                                  . "           WHEN (SELECT MIN(schedule_id) FROM PhysicalActionSchedule) "
-                                                 . "           THEN schedule_id+1 "
-                                                 . "           ELSE schedule_id "
+                                                 . "           THEN X.schedule_id+1 "
+                                                 . "           ELSE X.schedule_id "
                                                  . "           END) "
-                                                 . "FROM PhysicalActionSchedule "
-                                                 . "WHERE itemtype = @{[VSS_PROJECT]} AND actiontype IN "
+                                                 . "FROM PhysicalActionSchedule AS X, PhysItemtype AS Y "
+                                                 . "WHERE X.physname = Y.physname "
+                                                 . "AND Y.itemtype = @{[VSS_PROJECT]} AND X.actiontype IN "
                                                  . "('@{[ACTION_RESTOREDPROJECT]}', '@{[ACTION_RENAME]}', "
                                                  . "'@{[ACTION_DELETE]}', '@{[ACTION_DESTROY]}', '@{[ACTION_RECOVER]}', "
                                                  . "'@{[ACTION_RESTORE]}', '@{[ACTION_MOVE_TO]}', '@{[ACTION_MOVE_FROM]}')");
@@ -2576,24 +2621,26 @@ sub GetOneChangeset {
     # SHARE and BRANCH are pretty benign, other actions potentially
     # change files.
     ($schedule_id) = $gCfg{dbh}->selectrow_array("SELECT MIN(A.schedule_id) "
-                                                 . "FROM (SELECT schedule_id, actiontype, physname "
-                                                 . "      FROM PhysicalActionSchedule "
-                                                 . "      WHERE itemtype = @{[VSS_FILE]} AND parentdata != 0"
-                                                 . "      UNION ALL SELECT schedule_id, actiontype, physname "
-                                                 . "      FROM PhysicalActionSchedule "
-                                                 . "      WHERE itemtype = @{[VSS_FILE]} "
-                                                 . "      AND parentdata = 0"
-                                                 . "      AND actiontype IN ('@{[ACTION_COMMIT]}', '@{[ACTION_LABEL]}')"
+                                                 . "FROM (SELECT X.schedule_id AS schedule_id, X.actiontype AS actiontype, X.physname AS physname "
+                                                 . "      FROM PhysicalActionSchedule AS X, PhysItemtype AS Y "
+                                                 . "      WHERE X.physname = Y.physname AND Y.itemtype = @{[VSS_FILE]} "
+                                                 . "      AND X.parentdata != 0"
+                                                 . "      UNION ALL SELECT X.schedule_id AS schedule_id, X.actiontype AS actiontype, X.physname AS physname "
+                                                 . "      FROM PhysicalActionSchedule AS X, PhysItemtype AS Y "
+                                                 . "      WHERE X.physname = Y.physname AND Y.itemtype = @{[VSS_FILE]} "
+                                                 . "      AND X.parentdata = 0"
+                                                 . "      AND X.actiontype IN ('@{[ACTION_COMMIT]}', '@{[ACTION_LABEL]}')"
                                                  . "      ORDER BY schedule_id) AS A "
                                                  . "CROSS JOIN "
-                                                 . "     (SELECT schedule_id, actiontype, physname "
-                                                 . "      FROM PhysicalActionSchedule "
-                                                 . "      WHERE itemtype = @{[VSS_FILE]} AND parentdata != 0"
-                                                 . "      UNION ALL SELECT schedule_id, actiontype, physname "
-                                                 . "      FROM PhysicalActionSchedule "
-                                                 . "      WHERE itemtype = @{[VSS_FILE]} "
-                                                 . "      AND parentdata = 0"
-                                                 . "      AND actiontype IN ('@{[ACTION_COMMIT]}', '@{[ACTION_LABEL]}')"
+                                                 . "     (SELECT X.schedule_id AS schedule_id, X.actiontype AS actiontype, X.physname AS physname "
+                                                 . "      FROM PhysicalActionSchedule AS X, PhysItemtype AS Y "
+                                                 . "      WHERE X.physname = Y.physname AND Y.itemtype = @{[VSS_FILE]} "
+                                                 . "      AND X.parentdata != 0"
+                                                 . "      UNION ALL SELECT X.schedule_id AS schedule_id, X.actiontype AS actiontype, X.physname AS physname "
+                                                 . "      FROM PhysicalActionSchedule AS X, PhysItemtype AS Y "
+                                                 . "      WHERE X.physname = Y.physname AND Y.itemtype = @{[VSS_FILE]} "
+                                                 . "      AND X.parentdata = 0"
+                                                 . "      AND X.actiontype IN ('@{[ACTION_COMMIT]}', '@{[ACTION_LABEL]}')"
                                                  . "      ORDER BY schedule_id) AS B "
                                                  . "WHERE A.physname = B.physname AND A.schedule_id > B.schedule_id "
                                                  . "AND A.actiontype NOT IN ('@{[ACTION_SHARE]}', '@{[ACTION_BRANCH]}')");
