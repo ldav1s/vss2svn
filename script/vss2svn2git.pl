@@ -662,29 +662,46 @@ VERSION:
             $parentphys = $physname;
         }
 
+        # set up priority and optionally info
         for ($actiontype) {
+            when (ACTION_ADD) {
+                $priority = PA_PRIORITY_ADD;
+            }
             when (ACTION_RENAME) {
                 # if a rename, we store the new name in the action's 'info' field
                 $info = &GetItemName($version->findvalue('Action/NewSSName'),
                                      $version->findvalue('Action/NewSSName/@offset'),
                                      $namelookup);
+                $priority = PA_PRIORITY_MIN;
             }
             when (ACTION_BRANCH) {
                 $info = $version->findvalue('Action/Parent');
+                $priority = PA_PRIORITY_BRANCH;
             }
             when (ACTION_MOVE_TO) {
                 $info = $version->findvalue('Action/DestPath');
                 $info =~ s/^..(.*)$/$1/;
+                $priority = PA_PRIORITY_MIN;
             }
             when (ACTION_MOVE_FROM) {
                 $info = $version->findvalue('Action/SrcPath');
                 $info =~ s/^..(.*)$/$1/;
+                $priority = PA_PRIORITY_MIN;
             }
             when (ACTION_SHARE) {
                 # need these to reassemble SHARE+BRANCH actions
                 $info = $version->findvalue('Action/Physical');
+                $priority = PA_PRIORITY_SHARE;
+            }
+            when (ACTION_PIN) {
+                $priority = PA_PRIORITY_PIN;
+            }
+            default {
+                $priority = PA_PRIORITY_MIN;
             }
         }
+
+        # These might fall under multiple actiontypes
 
         # since there is no corresponding client action for PIN, we need to
         # enter the concrete version number here manually
@@ -694,16 +711,7 @@ VERSION:
         # for unpin actions also remeber the unpinned version
         $info = $version->findvalue('Action/UnpinnedFromVersion') if ($version->exists('Action/UnpinnedFromVersion'));
 
-        for ($actiontype) {
-            when (ACTION_ADD) { $priority = PA_PRIORITY_ADD; }
-            when (ACTION_SHARE) { $priority = PA_PRIORITY_SHARE; }
-            when (ACTION_PIN) { $priority = PA_PRIORITY_PIN; }
-            when (ACTION_BRANCH) { $priority = PA_PRIORITY_BRANCH; }
-            default {
-                $priority = PA_PRIORITY_MIN;
-            }
-        }
-
+        # now everything is setup, add to database
         $pt_sth->execute($tphysname, $itemtype);
         $pa_sth->execute($tphysname, $vernum, $parentphys, $actiontype, $itemname,
                          $timestamp, $user, $info, $priority,
