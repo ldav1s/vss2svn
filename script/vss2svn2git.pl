@@ -352,6 +352,8 @@ sub LoadUpVssNames {
 ###############################################################################
 sub FindPhysDbFiles {
 
+    my $sth = $gCfg{dbh}->prepare("INSERT INTO Physical (physname, datapath) VALUES (?, ?)");
+
     $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
 
     eval {
@@ -359,7 +361,6 @@ sub FindPhysDbFiles {
         my @dirs = ($gCfg{vssdatadir});
         my $start_depth = $gCfg{vssdatadir} =~ tr[/][];
         my $vssfile_depth = $start_depth + 1;
-        my @phys_list = ();
 
         find({
             preprocess => sub {
@@ -370,19 +371,10 @@ sub FindPhysDbFiles {
             wanted => sub {
                 my $depth = $File::Find::dir =~ tr[/][];
                 return if $depth != $vssfile_depth;
-                push @phys_list, uc($_), $File::Find::name;
+                $sth->execute(uc($_), $File::Find::name);
                 ++$vssdb_cnt;
-                if (scalar @phys_list >= PAIR_INSERT_VAL) {
-                    &LoadUpPhysical(\@phys_list);
-                    @phys_list = ();
-                }
             },
              }, @dirs);
-
-        if (scalar @phys_list > 0) {
-            &LoadUpPhysical(\@phys_list);
-            @phys_list = ();
-        }
         say "Found $vssdb_cnt VSS database files at '$gCfg{vssdatadir}'" if $gCfg{verbose};
     };
 
@@ -396,14 +388,6 @@ sub FindPhysDbFiles {
 
     1;
 }  #  End FindPhysDbFiles
-
-sub LoadUpPhysical {
-    my($phys_list) = @_;
-
-    my $val_clause = join q{,}, ('(?, ?)') x ((scalar @{$phys_list})/2);
-    my $sth = $gCfg{dbh}->prepare("INSERT INTO Physical (physname, datapath) VALUES $val_clause");
-    $sth->execute(@{$phys_list});
-}
 
 ###############################################################################
 #  GetPhysVssHistory
