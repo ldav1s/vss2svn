@@ -3111,9 +3111,10 @@ sub GitLabel {
 # handle different kinds of moves
 sub DoMoveProject {
     my($repo, $path, $newpath, $git_image, $newtest) = @_;
+    my $imatch = ($path =~ /^\Q$newpath\E$/i);
 
-    if ($newtest ? (! -d $newpath) : (-d $path)) {
-        if ($path =~ /^\Q$newpath\E$/i) {
+    if ($newtest ? ((! -d $newpath) || $imatch) : (-d $path)) {
+        if ($imatch) {
             my $tmp_mv = File::Spec->catdir(dirname($path), MOVE_TMP_FILE);
             $repo->logrun(mv =>  $path,  $tmp_mv);
             $repo->logrun(mv =>  $tmp_mv,  $newpath);
