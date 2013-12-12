@@ -131,6 +131,9 @@ my $author_map = {};
 # The main VSS activity is put into git master, and labels into their own branch
 my $master_re = qr/^master$/i;
 
+# A regex for the repo directory
+my $repo_re;
+
 # store a hash of actions to take; allows restarting in case of failed
 # migration
 my @joblist =
@@ -918,7 +921,6 @@ sub GitReadImage {
     # SO is CC BY-SA 3.0 <http://creativecommons.org/licenses/by-sa/3.0/>
     # at the time of this writing.
     my @shares = ();
-    my $repo_re = qr/^\Q$gCfg{repo}\E./; # XXX not portable
     my @appdir = ('$GIT_DIR', File::Spec->updir());
     foreach my $key (keys %git_image) {
         if (ref($git_image{$key})) {
@@ -2021,6 +2023,9 @@ sub Initialize {
 
     # set up these items now
     $git_image{"@{[VSSDB_ROOT]}"} = $gCfg{repo};
+    $gCfg{exclude} = File::Spec->catfile($gCfg{repo}, '.git', 'info', 'exclude');
+    $repo_re = qr/^\Q$gCfg{repo}\E./; # XXX not portable
+
 
     if (! -d $gCfg{vssdatadir}) {
         die "The VSS database '$gCfg{vssdir}' "
@@ -2030,7 +2035,7 @@ sub Initialize {
     if (defined($gCfg{author_info}) && ! -r $gCfg{author_info}) {
         die "author_info file '$gCfg{author_info}' is not readable";
     } else {
-        open my $info, $gCfg{author_info} or die "Could not open $gCfg{author_info}: $!";
+        open my $info, "<$gCfg{author_info}" or die "Could not open $gCfg{author_info}: $!";
         my $err = 0;
 
         while (<$info>) {
