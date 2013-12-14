@@ -84,7 +84,10 @@ use constant {
     PA_PRIORITY_SHARE => 2,
     PA_PRIORITY_PIN => 2,
     PA_PRIORITY_BRANCH => 3,
-    PA_PRIORITY_MIN => 5, # minimum priority
+    PA_PRIORITY_NORMAL => 5,
+    PA_PRIORITY_DELETE => 7,
+    PA_PRIORITY_DESTROY => 8,
+    PA_PRIORITY_MIN => 8, # minimum priority
 };
 
 # actions used in actiontype database column
@@ -670,6 +673,8 @@ VERSION:
         }
 
         # set up priority and optionally info
+        my @delete_actions = (ACTION_DELETE, ACTION_DESTROY);
+        my @move_actions = (ACTION_MOVE_TO, ACTION_MOVE_FROM);
         for ($actiontype) {
             when (ACTION_ADD) {
                 $priority = PA_PRIORITY_ADD;
@@ -679,21 +684,16 @@ VERSION:
                 $info = &GetItemName($version->findvalue('Action/NewSSName'),
                                      $version->findvalue('Action/NewSSName/@offset'),
                                      $namelookup);
-                $priority = PA_PRIORITY_MIN;
+                $priority = PA_PRIORITY_NORMAL;
             }
             when (ACTION_BRANCH) {
                 $info = $version->findvalue('Action/Parent');
                 $priority = PA_PRIORITY_BRANCH;
             }
-            when (ACTION_MOVE_TO) {
-                $info = $version->findvalue('Action/DestPath');
+            when (@move_actions) {
+                $info = $version->findvalue((($actiontype eq ACTION_MOVE_TO) ? 'Action/DestPath' : 'Action/SrcPath'));
                 $info =~ s/^..(.*)$/$1/;
-                $priority = PA_PRIORITY_MIN;
-            }
-            when (ACTION_MOVE_FROM) {
-                $info = $version->findvalue('Action/SrcPath');
-                $info =~ s/^..(.*)$/$1/;
-                $priority = PA_PRIORITY_MIN;
+                $priority = PA_PRIORITY_NORMAL;
             }
             when (ACTION_SHARE) {
                 # need these to reassemble SHARE+BRANCH actions
@@ -703,8 +703,11 @@ VERSION:
             when (ACTION_PIN) {
                 $priority = PA_PRIORITY_PIN;
             }
+            when (@delete_actions) {
+                $priority = ($actiontype eq ACTION_DELETE) ? PA_PRIORITY_DELETE : PA_PRIORITY_DESTROY;
+            }
             default {
-                $priority = PA_PRIORITY_MIN;
+                $priority = PA_PRIORITY_NORMAL;
             }
         }
 
@@ -750,7 +753,7 @@ VERSION:
 
             $pt_sth->execute($tphysname, $itemtype);
             $pa_sth->execute($tphysname, $vernum, $parentphys, ACTION_LABEL, $itemname,
-                             $timestamp, $user, $info, PA_PRIORITY_MIN,
+                             $timestamp, $user, $info, PA_PRIORITY_NORMAL,
                              $parentdata, $labelComment);
             $linsert = $gCfg{dbh}->last_insert_id("","","","");
             $li_sth->execute($linsert, $vlabel // '');
