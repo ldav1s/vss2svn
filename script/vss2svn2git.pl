@@ -2775,7 +2775,8 @@ sub UpdateGitRepository {
                             if (! -f  $link_file) {
                                 my ($action_id) = $gCfg{dbh}->selectrow_array("SELECT action_id "
                                                                               . "FROM PhysicalAction "
-                                                                              . "WHERE physname = ? AND actiontype = '@{[ACTION_DESTROY]}' "
+                                                                              . "WHERE physname = ? "
+                                                                              . "AND actiontype = '@{[ACTION_DESTROY]}' "
                                                                               . "LIMIT 1",
                                                                               undef, $row->{physname});
                                 if (!copy((($action_id) ? $gCfg{destroyedFile} : $gCfg{indeterminateFile}),
