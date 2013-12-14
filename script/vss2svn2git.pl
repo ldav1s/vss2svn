@@ -3233,6 +3233,20 @@ sub RemoveKeep {
     $repo->logrun(rm => '-f', '-q', '--',  $keep) if -f $keep;
 }
 
+sub LastDeleteTime {
+    my($physname, $timestamp) = @_;
+    my ($action_id_del) =  $gCfg{dbh}->selectrow_array("SELECT action_id "
+                                                       . "FROM PhysicalAction "
+                                                       . "WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
+                                                       . "AND timestamp =  "
+                                                       . "(SELECT MAX(timestamp) "
+                                                       . " FROM PhysicalAction "
+                                                       . " WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
+                                                       . " AND timestamp < ?)",
+                                                       undef, $physname, $physname, $timestamp);
+    return $action_id_del;
+}
+
 # handle the recover
 sub GitRecover {
     my($repo, $row, $path, $git_image) = @_;
@@ -3243,15 +3257,7 @@ sub GitRecover {
                                                   . "WHERE physname = ? AND actiontype = '@{[ACTION_DESTROY]}' "
                                                   . "LIMIT 1", # just in case
                                                   undef, $row->{physname});
-    my ($action_id_del) =  $gCfg{dbh}->selectrow_array("SELECT action_id "
-                                                       . "FROM PhysicalAction "
-                                                       . "WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
-                                                       . "AND timestamp =  "
-                                                       . "(SELECT MAX(timestamp) "
-                                                       . " FROM PhysicalAction "
-                                                       . " WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
-                                                       . " AND timestamp < ?)",
-                                                       undef, $row->{physname}, $row->{physname}, $row->{timestamp});
+    my $action_id_del = &LastDeleteTime($row->{physname}, $row->{timestamp});
 
     if (! -e $path) {
         for ($row->{itemtype}) {
