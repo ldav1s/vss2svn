@@ -2762,6 +2762,7 @@ sub UpdateGitRepository {
             }
         }
         when (VSS_FILE) {
+            my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
             for ($row->{actiontype}) {
                 when (ACTION_ADD) {
                     # recorded in both the parent and child
@@ -2770,7 +2771,6 @@ sub UpdateGitRepository {
                             # In the case of a destroyed file there's only the parent record
                             # we'll go ahead and add the file in case the child record is blown away
                             # by something.
-                            my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
 
                             if (! -f  $link_file) {
                                 my ($action_id) = $gCfg{dbh}->selectrow_array("SELECT action_id "
@@ -2798,7 +2798,6 @@ sub UpdateGitRepository {
                     } elsif (defined $git_image->{$row->{physname}}
                              && ref($git_image->{$row->{physname}})) {
                         # we have child data here
-                        my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
                         my $is_destroyed;
 
                         $path = @{$git_image->{$row->{physname}}}[0];
@@ -2824,7 +2823,6 @@ sub UpdateGitRepository {
                         # This step seems to happen chronologically first before
                         # writing the parent info, so they may be in different timestamps
                         my $is_destroyed;
-                        my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
                         my $efile = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
 
                         if (defined $efile) {
@@ -2907,7 +2905,6 @@ sub UpdateGitRepository {
                     my $newver = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
 
                     if (defined $newver) {
-                        my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
 
                         if (!copy($newver, $link_file)) {
                             warn "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} newver `$newver' path `$link_file' copy $!";
@@ -2939,7 +2936,6 @@ sub UpdateGitRepository {
                 when (ACTION_BRANCH) {
                     # branches recorded in parent and child
                     # no git action required
-                    my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
                     my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
 
                     if ($row->{parentdata}) {
@@ -2987,7 +2983,6 @@ sub UpdateGitRepository {
                     }
                 }
                 when (ACTION_PIN) {
-                    my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
                     my $is_destroyed;
                     my $wrote_destroyed = 0;
 
