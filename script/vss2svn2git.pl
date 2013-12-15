@@ -864,6 +864,7 @@ sub GitReadImage {
 
 #            if ($dump_cnt % 100 == 0) {
 #                say "git_image: " . Dumper(\%git_image) if $gCfg{debug};
+#                say "destroyed files: " . Dumper($destroyed_files) if $gCfg{debug};
 #                if ($dump_cnt == 100) {
 #                    exit(0);
 #                }
