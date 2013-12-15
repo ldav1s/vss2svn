@@ -2812,7 +2812,9 @@ sub UpdateGitRepository {
                                     $repo->logrun(add => '--',  $path);
                                     &RemoveKeep($repo, $parentpath);
                                 } else {
-                                    $destroyed_files->{$row->{physname}} = 1;
+                                    if (!$destroyed_files->{$row->{physname}}) {
+                                        $destroyed_files->{$row->{physname}} = 1;
+                                    }
                                     &AppendExcludeEntry($path);
                                 }
                             }
@@ -2878,18 +2880,52 @@ sub UpdateGitRepository {
                 when (@delete_actions) {
                     # these are only recorded in the parent
                     my $path_re = qr/^\Q$path\E$/;
+                    my $unlinked_file = 0;
 
                     if (-f $path) {
+                        my ($link_ino, $path_ino);
+
+                        (undef, $link_ino) = stat($link_file);
+                        (undef, $path_ino) = stat($path);
+
                         @{$git_image->{$row->{physname}}} = grep {!/$path_re/} @{$git_image->{$row->{physname}}};
 
                         if (scalar @{$git_image->{$row->{physname}}} == 0) {
                             say "UpdateGitRepository delete @{[VSS_FILE]}: deleting git image $row->{physname}" if $gCfg{debug};
                             delete $git_image->{$row->{physname}};
                         }
-                        &GitRm($repo, $parentpath, $path, $row->{itemtype}, $row->{actiontype}, $row->{action_id});
+
+                        # must check the inode at the path because:
+                        # file1 may be DELETEd, file2 ADDed, and file1 DESTROYed.
+                        if ($link_ino == $path_ino) {
+                            if (!defined $destroyed_files->{$row->{physname}}) {
+                                &GitRm($repo, $parentpath, $path, $row->{itemtype}, $row->{actiontype}, $row->{action_id});
+                            } else {
+                                unlink $path;
+                                $unlinked_file = 1;
+                            }
+                        } elsif ($row->{actiontype} eq ACTION_DESTROY) {
+                            my $action_id_del = &LastDeleteTime($row->{physname}, $row->{timestamp});
+                            my $delete_loc = File::Spec->catfile($gCfg{deleted}, $action_id_del);
+                            my $delete_loc_ino;
+
+                            (undef, $delete_loc_ino) = stat($delete_loc);
+                            if ($link_ino == $delete_loc_ino) {
+                                unlink $delete_loc;
+                            }
+                        }
                     }
-                    delete $destroyed_files->{$row->{physname}};
-                    &RewriteExcludes($path);
+
+                    # deleted files can be recovered, so it doesn't really affect the
+                    # link count
+                    if ($unlinked_file) {
+                        if ($destroyed_files->{$row->{physname}} <= 1) {
+                            delete $destroyed_files->{$row->{physname}};
+                        } else {
+                            --$destroyed_files->{$row->{physname}};
+                        }
+                        &RewriteExcludes($path);
+                    }
                 }
                 when (ACTION_RECOVER) {
                     &GitRecover($repo, $row, $path, $git_image);
@@ -2912,8 +2948,10 @@ sub UpdateGitRepository {
                             if (!$is_destroyed) {
                                 $repo->logrun(add => '--',  $path);
                             } else {
-                                $destroyed_files->{$row->{physname}} = 1;
-                                &AppendExcludeEntry($path);
+                                if (!$destroyed_files->{$row->{physname}}) {
+                                    $destroyed_files->{$row->{physname}} = 1;
+                                    &AppendExcludeEntry($path);
+                                }
                             }
                         }
                     }
@@ -2930,6 +2968,7 @@ sub UpdateGitRepository {
                             &RemoveKeep($repo, $parentpath);
                         } else {
                             &AppendExcludeEntry($path);
+                            ++$destroyed_files->{$row->{physname}};
                         }
                     }
                 }
@@ -2964,6 +3003,9 @@ sub UpdateGitRepository {
                         if ($using_li && $destroyed_files->{$row->{info}}) {
                             $destroyed_files->{$row->{physname}} = 1;
                             &AppendExcludeEntry($path);
+                            if ($destroyed_files->{$row->{info}} >= 2) {
+                                --$destroyed_files->{$row->{info}};
+                            }
                         } elsif (!$using_li) {
                             my $pathhash = $repo->logrun('hash-object' => '--', $path);
                             if ($gCfg{destroyedHash} eq $pathhash) {
@@ -2999,14 +3041,14 @@ sub UpdateGitRepository {
                             if (!copy($efile, $link_file)) {
                                 warn "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
                             } else {
-                                $wrote_destroyed = 1;
+                                $wrote_destroyed = 1 if $is_destroyed;
                             }
                         }
                     }
 
                     unlink $path if -f $path; # get rid of pinned/unpinned file
                     link $link_file, $path;
-                    if (!$is_destroyed && !$wrote_destroyed) {
+                    if (!$wrote_destroyed) {
                         $repo->logrun(add => '--',  $path);
                     } else {
                         $destroyed_files->{$row->{physname}} = 1;
@@ -3025,6 +3067,7 @@ sub UpdateGitRepository {
         say "An error ($@) occurred";
         say "git_image: " . Dumper(\%git_image);
         say "row: " . Dumper($row);
+        say "destroyed_files: " . Dumper($destroyed_files);
         die "can't finish reading actions";
     }
 
