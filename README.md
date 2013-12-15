@@ -44,7 +44,7 @@ Clone this repo.  Then:
 or something like that.  You'll need a C++ compiler and Boost 1.53 with
 the system and filesytem libraries to build `ssphys`.  For the perl
 part `vss2svn2git.pl`, you'll need at least perl 5.10.1, DBI, DBD::SQLite,
-XML::LibXML, Git::Repository and IPC::Run.
+XML::LibXML, Git::Repository, Term::ProgressBar, and IPC::Run.
 
 # Migration
 
@@ -105,7 +105,6 @@ Data extraction is performed in much the same way as vss2svn:
   except labels ('GITREAD') .
 * Creates an orphaned branch for each label, and copies the specified
   files/projects into the branch ('GITLABEL').
-* Removes destroyed items from all branches ('GITDESTROY').
 * Final cleanup ('CLEANUP').
 
 Each file in the git repository is hard linked to a file in the
@@ -127,12 +126,15 @@ incompatible attributes in `.gitattributes`:
 It'll be hard to say exactly _which_ attribute will be applied since
 they are the same file.  This should not be a problem most of the time.
 
+I'm treating the destroyed files as deleted files mostly.  It seems to
+me that VSS's destroy option was primarily a _storage saving
+mechanism_ when disk space was scarcer and not an _information removal
+mechanism_ even though it did do that as well.  I'm using
+`.git/info/exclude` to filter out files that are destroyed.
+
 # TODO
 
 * Fix `--resume`, it's probably broken
 * When a window of commits is scheduled, the _entire_ window is
   scheduled.  Now that the window slides, only the _new_ commits need to
   be scheduled.
-* Find a better way of dealing with destroyed files.  Now destroyed
- files are filtered out by git after the migration, which is slow.
- There must be a better way of doing this on the input side.
