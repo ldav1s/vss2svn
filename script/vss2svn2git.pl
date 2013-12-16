@@ -1701,7 +1701,7 @@ sub DisconnectDatabase {
 #  SetupGlobals
 ###############################################################################
 sub SetupGlobals {
-    if ($gCfg{task} eq TASK_INIT) {
+    if (!$gCfg{resume}) {
         &InitSysTables;
     } else {
         &ReloadSysTables;
