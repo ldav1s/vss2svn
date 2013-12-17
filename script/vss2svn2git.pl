@@ -145,7 +145,7 @@ my @joblist =
     (
      {
          task    => TASK_INIT,
-         handler => sub{ 1; },
+         handler => sub{ $gCfg{resume} = 0; 1; },
      },
      # Load the "real" names associated with the stored "short" names
      {
