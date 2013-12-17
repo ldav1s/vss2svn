@@ -224,6 +224,7 @@ my @system_info_params = (
     { 'ssphys' =>  'VARCHAR' },
     { 'tempdir' => 'VARCHAR' },
     { 'starttime' => 'VARCHAR' },
+    { 'gpvh_physname' => 'VARCHAR' }, # checkpoint for GetPhysVssHistory
     );
 
 &Initialize;
@@ -411,6 +412,13 @@ sub GetPhysVssHistory {
     my $progress;
     my $next_update = 0;
 
+    if ($gCfg{resume}) {
+        # back up to last transaction checkpoint
+        $physname = $gCfg{gpvh_physname};
+        ($prg_cnt) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM Physical WHERE physname <= ?', undef, $physname);
+        $gCfg{resume} = 0;
+    }
+
     if (!($gCfg{debug} || $gCfg{verbose})) {
         $progress = Term::ProgressBar->new({name  => 'VSS History',
                                             count => $phys_count,
@@ -426,6 +434,7 @@ sub GetPhysVssHistory {
     my $pt_sth = $gCfg{dbh}->prepare('INSERT OR IGNORE INTO PhysItemtype (physname, itemtype) VALUES (?, ?)');
     my $b_sth = $gCfg{dbh}->prepare('INSERT INTO FileBinary (physname, is_binary) VALUES (?, ?)');
     my $li_sth = $gCfg{dbh}->prepare('INSERT INTO PhysLabel (action_id, label) VALUES (?, ?)');
+    my $cp_sth = $gCfg{dbh}->prepare('UPDATE SystemInfo SET gpvh_physname = ?');
 
     my $pa_sth;
     {
@@ -456,6 +465,7 @@ sub GetPhysVssHistory {
             eval { $gCfg{dbh}->rollback };
             die "Failed to load VSS items for `$physname'";
         } else {
+            $cp_sth->execute($physname);
             $gCfg{dbh}->commit;
         }
 
