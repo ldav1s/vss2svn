@@ -798,6 +798,8 @@ sub TestGitAuthorInfo {
     my $in_clause = join q{,}, ('?') x (scalar @amk);
     my $err = 0;
 
+    $gCfg{resume} = 0;
+
     $sth = $gCfg{dbh}->prepare("SELECT DISTINCT author "
                                ."FROM PhysicalAction "
                                . "WHERE author NOT IN ($in_clause) "
@@ -1197,6 +1199,9 @@ sub Cleanup {
 # remove temporary checkins that where create to detect MS VSS capabilities
 ###############################################################################
 sub RemoveTemporaryCheckIns {
+
+    $gCfg{resume} = 0;
+
     # more info at "Elimination of ~SAK Files" : <http://msdn.microsoft.com/en-us/library/bb165458(v=vs.80).aspx>
     my $sql = <<"EOSQL";
 DELETE FROM PhysicalAction WHERE action_id IN
