@@ -2695,363 +2695,363 @@ sub UpdateGitRepository {
     my @restore_actions = (ACTION_RESTORE, ACTION_RESTOREDPROJECT);
 
     eval {
-    for ($row->{itemtype}) {
-        when (VSS_PROJECT) {
-            for ($row->{actiontype}) {
-                when (ACTION_ADD) {
-                    if (! -d $path) {
-                        make_path($path);
-                        if (!copy($gCfg{keepFile}, $path)) {
-                            warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_PROJECT]} copy $!";
-                        } else {
-                            $git_image->{$row->{physname}} = $path;
-                            $repo->logrun(add => '--',  $path);
-                            &RemoveKeep($repo, $parentpath);
-                        }
-                    }
-                }
-                when (@restore_actions) {
-                    # XXX need example
-                    # I don't think anything needs to be done here anyway
-                    # but I could be mistaken.
-                }
-                when (ACTION_RENAME) {
-                    my $newpath = File::Spec->catdir($parentpath, $row->{info});
-                    &DoMoveProject($repo, $path, $newpath, $git_image, 1);
-                    &MoveExcludes($path, $newpath);
-                }
-                when (ACTION_MOVE_TO) {
-                    # physname directory inode to move
-                    # parentphys physname's parent directory
-                    # info destination directory path
-                    my $newpath = File::Spec->catdir($gCfg{repo}, $row->{info});
-
-                    &DoMoveProject($repo, $path, $newpath, $git_image, 1);
-                }
-                when (ACTION_MOVE_FROM) {
-                    # physname moved directory inode
-                    # parentphys destination's parent directory
-                    # info source directory path
-                    my $oldpath = File::Spec->catdir($gCfg{repo}, $row->{info});
-
-                    &DoMoveProject($repo, $oldpath, $path, $git_image, 0);
-                    &MoveExcludes($oldpath, $path);
-                }
-                when (@delete_actions) {
-                    if (-d $path) {
-                        &RmProject($path, $git_image);
-                        &RewriteExcludes($path, 1);
-                        &GitRm($repo, $parentpath, $path, $row->{itemtype}, $row->{actiontype}, $row->{action_id});
-                    }
-                }
-                when (ACTION_RECOVER) {
-                    &GitRecover($repo, $row, $path, $git_image);
-                }
-                when (ACTION_LABEL) {
-                    &DeferLabel($row, $repo);
-                }
-            }
-        }
-        when (VSS_FILE) {
-            my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
-            for ($row->{actiontype}) {
-                when (ACTION_ADD) {
-                    # recorded in both the parent and child
-                    if ($row->{parentdata}) {
-                        if (! -f $path) {
-                            # In the case of a destroyed file there's only the parent record
-                            # we'll go ahead and add the file in case the child record is blown away
-                            # by something.
-
-                            if (! -f  $link_file) {
-                                my ($action_id) = $gCfg{dbh}->selectrow_array("SELECT action_id "
-                                                                              . "FROM PhysicalAction "
-                                                                              . "WHERE physname = ? "
-                                                                              . "AND actiontype = '@{[ACTION_DESTROY]}' "
-                                                                              . "LIMIT 1",
-                                                                              undef, $row->{physname});
-                                if (!copy((($action_id) ? $gCfg{destroyedFile} : $gCfg{indeterminateFile}),
-                                          $link_file)) {  # touch the file
-                                    warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!";
-                                }
-                                if ($action_id) {
-                                    $destroyed_files->{$row->{physname}} = 1;
-                                    &AppendExcludeEntry($path);
-                                }
-                            }
-                            link $link_file, $path;
-                            if (!$destroyed_files->{$row->{physname}}) {
+        for ($row->{itemtype}) {
+            when (VSS_PROJECT) {
+                for ($row->{actiontype}) {
+                    when (ACTION_ADD) {
+                        if (! -d $path) {
+                            make_path($path);
+                            if (!copy($gCfg{keepFile}, $path)) {
+                                warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_PROJECT]} copy $!";
+                            } else {
+                                $git_image->{$row->{physname}} = $path;
                                 $repo->logrun(add => '--',  $path);
                                 &RemoveKeep($repo, $parentpath);
                             }
-                            @{$git_image->{$row->{physname}}} = ("$path"); # may be on multiple paths
                         }
-                    } elsif (defined $git_image->{$row->{physname}}
-                             && ref($git_image->{$row->{physname}})) {
-                        # we have child data here
-                        my $is_destroyed;
+                    }
+                    when (@restore_actions) {
+                        # XXX need example
+                        # I don't think anything needs to be done here anyway
+                        # but I could be mistaken.
+                    }
+                    when (ACTION_RENAME) {
+                        my $newpath = File::Spec->catdir($parentpath, $row->{info});
+                        &DoMoveProject($repo, $path, $newpath, $git_image, 1);
+                        &MoveExcludes($path, $newpath);
+                    }
+                    when (ACTION_MOVE_TO) {
+                        # physname directory inode to move
+                        # parentphys physname's parent directory
+                        # info destination directory path
+                        my $newpath = File::Spec->catdir($gCfg{repo}, $row->{info});
 
-                        $path = @{$git_image->{$row->{physname}}}[0];
-                        my $efile = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
+                        &DoMoveProject($repo, $path, $newpath, $git_image, 1);
+                    }
+                    when (ACTION_MOVE_FROM) {
+                        # physname moved directory inode
+                        # parentphys destination's parent directory
+                        # info source directory path
+                        my $oldpath = File::Spec->catdir($gCfg{repo}, $row->{info});
 
-                        if (defined $efile) {
-                            # copy the data to the link
-                            if (!copy($efile, $link_file)) {
-                                warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
-                            } else {
-                                if (!$is_destroyed && !$destroyed_files->{$row->{physname}}) {
+                        &DoMoveProject($repo, $oldpath, $path, $git_image, 0);
+                        &MoveExcludes($oldpath, $path);
+                    }
+                    when (@delete_actions) {
+                        if (-d $path) {
+                            &RmProject($path, $git_image);
+                            &RewriteExcludes($path, 1);
+                            &GitRm($repo, $parentpath, $path, $row->{itemtype}, $row->{actiontype}, $row->{action_id});
+                        }
+                    }
+                    when (ACTION_RECOVER) {
+                        &GitRecover($repo, $row, $path, $git_image);
+                    }
+                    when (ACTION_LABEL) {
+                        &DeferLabel($row, $repo);
+                    }
+                }
+            }
+            when (VSS_FILE) {
+                my $link_file = File::Spec->catfile($gCfg{links}, $row->{physname});
+                for ($row->{actiontype}) {
+                    when (ACTION_ADD) {
+                        # recorded in both the parent and child
+                        if ($row->{parentdata}) {
+                            if (! -f $path) {
+                                # In the case of a destroyed file there's only the parent record
+                                # we'll go ahead and add the file in case the child record is blown away
+                                # by something.
+
+                                if (! -f  $link_file) {
+                                    my ($action_id) = $gCfg{dbh}->selectrow_array("SELECT action_id "
+                                                                                  . "FROM PhysicalAction "
+                                                                                  . "WHERE physname = ? "
+                                                                                  . "AND actiontype = '@{[ACTION_DESTROY]}' "
+                                                                                  . "LIMIT 1",
+                                                                                  undef, $row->{physname});
+                                    if (!copy((($action_id) ? $gCfg{destroyedFile} : $gCfg{indeterminateFile}),
+                                              $link_file)) {  # touch the file
+                                        warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!";
+                                    }
+                                    if ($action_id) {
+                                        $destroyed_files->{$row->{physname}} = 1;
+                                        &AppendExcludeEntry($path);
+                                    }
+                                }
+                                link $link_file, $path;
+                                if (!$destroyed_files->{$row->{physname}}) {
                                     $repo->logrun(add => '--',  $path);
                                     &RemoveKeep($repo, $parentpath);
+                                }
+                                @{$git_image->{$row->{physname}}} = ("$path"); # may be on multiple paths
+                            }
+                        } elsif (defined $git_image->{$row->{physname}}
+                                 && ref($git_image->{$row->{physname}})) {
+                            # we have child data here
+                            my $is_destroyed;
+
+                            $path = @{$git_image->{$row->{physname}}}[0];
+                            my $efile = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
+
+                            if (defined $efile) {
+                                # copy the data to the link
+                                if (!copy($efile, $link_file)) {
+                                    warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
+                                } else {
+                                    if (!$is_destroyed && !$destroyed_files->{$row->{physname}}) {
+                                        $repo->logrun(add => '--',  $path);
+                                        &RemoveKeep($repo, $parentpath);
+                                    } else {
+                                        if (!$destroyed_files->{$row->{physname}}) {
+                                            $destroyed_files->{$row->{physname}} = 1;
+                                        }
+                                        &AppendExcludeEntry($path);
+                                    }
+                                }
+                            }
+                        } else {
+                            # we have child data, but no parent data (yet)
+                            # read it out for the link
+                            # This step seems to happen chronologically first before
+                            # writing the parent info, so they may be in different timestamps
+                            my $is_destroyed;
+                            my $efile = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
+
+                            if (defined $efile) {
+                                # copy the data to the link
+                                if (!copy($efile, $link_file)) {
+                                    warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' link path `$link_file' copy $!";
+                                }
+                                if ($is_destroyed) {
+                                    $destroyed_files->{$row->{physname}} = 1;
+                                }
+                            }
+                        }
+                    }
+                    when (ACTION_RENAME) {
+                        # these are only recorded in the parent
+                        # Files may be renamed after DELETE(!) through a SHARE apparently
+                        # so we need to check for their existence
+                        my $newpath = File::Spec->catfile($parentpath, $row->{info});
+                        if (-f $path) {
+                            # check for renames involving case only
+                            if ($path =~ /^\Q$newpath\E$/i) {
+                                my $tmp_mv = File::Spec->catfile(dirname($path), MOVE_TMP_FILE);
+                                if (!$destroyed_files->{$row->{physname}}) {
+                                    $repo->logrun(mv =>  $path,  $tmp_mv);
+                                    $repo->logrun(mv =>  $tmp_mv,  $newpath);
+                                } else {
+                                    if (!move($path, $tmp_mv)) {
+                                        warn "UpdateGitRepository: @{[ACTION_RENAME]} @{[VSS_FILE]} path: `$path' tmp: `$tmp_mv' $!";
+                                    }
+                                    if (!move($tmp_mv, $newpath)) {
+                                        warn "UpdateGitRepository: @{[ACTION_RENAME]} @{[VSS_FILE]} tmp: `$tmp_mv' newpath: `$newpath' $!";
+                                    }
+                                }
+                            } else {
+                                if (!$destroyed_files->{$row->{physname}}) {
+                                    $repo->logrun(mv =>  $path,  $newpath);
+                                } else {
+                                    if (!move($path, $newpath)) {
+                                        warn "UpdateGitRepository: @{[ACTION_RENAME]} @{[VSS_FILE]} path: `$path' newpath: `$newpath' $!";
+                                    }
+                                }
+                            }
+                        }
+
+                        # remove the old path, add the new path
+                        @{$git_image->{$row->{physname}}} = grep {!/^\Q$path\E$/} @{$git_image->{$row->{physname}}};
+                        push @{$git_image->{$row->{physname}}}, $newpath;
+                        if ($destroyed_files->{$row->{physname}}) {
+                            &RewriteExcludes($path);
+                            &AppendExcludeEntry($newpath);
+                        }
+                    }
+                    when (@delete_actions) {
+                        # these are only recorded in the parent
+                        my $path_re = qr/^\Q$path\E$/;
+                        my $unlinked_file = 0;
+
+                        if (-f $path) {
+                            my ($link_ino, $path_ino);
+
+                            (undef, $link_ino) = stat($link_file);
+                            (undef, $path_ino) = stat($path);
+
+                            @{$git_image->{$row->{physname}}} = grep {!/$path_re/} @{$git_image->{$row->{physname}}};
+
+                            if (scalar @{$git_image->{$row->{physname}}} == 0) {
+                                say "UpdateGitRepository delete @{[VSS_FILE]}: deleting git image $row->{physname}" if $gCfg{debug};
+                                delete $git_image->{$row->{physname}};
+                            }
+
+                            # must check the inode at the path because:
+                            # file1 may be DELETEd, file2 ADDed, and file1 DESTROYed.
+                            if ($link_ino == $path_ino) {
+                                if (!defined $destroyed_files->{$row->{physname}}) {
+                                    &GitRm($repo, $parentpath, $path, $row->{itemtype}, $row->{actiontype}, $row->{action_id});
+                                } else {
+                                    unlink $path;
+                                    $unlinked_file = 1;
+                                }
+                            } elsif ($row->{actiontype} eq ACTION_DESTROY) {
+                                my $action_id_del = &LastDeleteTime($row->{physname}, $row->{timestamp});
+                                my $delete_loc = File::Spec->catfile($gCfg{deleted}, $action_id_del);
+                                my $delete_loc_ino;
+
+                                (undef, $delete_loc_ino) = stat($delete_loc);
+                                if ($link_ino == $delete_loc_ino) {
+                                    unlink $delete_loc;
+                                }
+                            }
+                        }
+
+                        # deleted files can be recovered, so it doesn't really affect the
+                        # link count
+                        if ($unlinked_file) {
+                            if ($destroyed_files->{$row->{physname}} <= 1) {
+                                delete $destroyed_files->{$row->{physname}};
+                            } else {
+                                --$destroyed_files->{$row->{physname}};
+                            }
+                            &RewriteExcludes($path);
+                        }
+                    }
+                    when (ACTION_RECOVER) {
+                        &GitRecover($repo, $row, $path, $git_image);
+                    }
+                    when (@restore_actions) {
+                        # XXX need example
+                        # I don't think anything needs to be done here anyway
+                        # but I could be mistaken.
+                    }
+                    when (ACTION_COMMIT) {
+                        # only recorded in the child
+                        my $is_destroyed;
+                        my $newver = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
+
+                        if (defined $newver) {
+
+                            if (!copy($newver, $link_file)) {
+                                warn "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} newver `$newver' path `$link_file' copy $!";
+                            } else {
+                                if (!$is_destroyed) {
+                                    $repo->logrun(add => '--',  $path);
                                 } else {
                                     if (!$destroyed_files->{$row->{physname}}) {
                                         $destroyed_files->{$row->{physname}} = 1;
+                                        &AppendExcludeEntry($path);
                                     }
-                                    &AppendExcludeEntry($path);
                                 }
                             }
                         }
-                    } else {
-                        # we have child data, but no parent data (yet)
-                        # read it out for the link
-                        # This step seems to happen chronologically first before
-                        # writing the parent info, so they may be in different timestamps
-                        my $is_destroyed;
-                        my $efile = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
-
-                        if (defined $efile) {
-                            # copy the data to the link
-                            if (!copy($efile, $link_file)) {
-                                warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' link path `$link_file' copy $!";
-                            }
-                            if ($is_destroyed) {
-                                $destroyed_files->{$row->{physname}} = 1;
-                            }
-                        }
                     }
-                }
-                when (ACTION_RENAME) {
-                    # these are only recorded in the parent
-                    # Files may be renamed after DELETE(!) through a SHARE apparently
-                    # so we need to check for their existence
-                    my $newpath = File::Spec->catfile($parentpath, $row->{info});
-                    if (-f $path) {
-                        # check for renames involving case only
-                        if ($path =~ /^\Q$newpath\E$/i) {
-                            my $tmp_mv = File::Spec->catfile(dirname($path), MOVE_TMP_FILE);
+                    when (ACTION_SHARE) {
+                        # only recorded in parent (but present in child XML)
+                        my $oldpath = &SearchForPath($row->{physname}, $git_image);
+
+                        if (! -f $path) {
+                            link $oldpath, $path;
+                            push @{$git_image->{$row->{physname}}}, $path;
                             if (!$destroyed_files->{$row->{physname}}) {
-                                $repo->logrun(mv =>  $path,  $tmp_mv);
-                                $repo->logrun(mv =>  $tmp_mv,  $newpath);
-                            } else {
-                                if (!move($path, $tmp_mv)) {
-                                    warn "UpdateGitRepository: @{[ACTION_RENAME]} @{[VSS_FILE]} path: `$path' tmp: `$tmp_mv' $!";
-                                }
-                                if (!move($tmp_mv, $newpath)) {
-                                    warn "UpdateGitRepository: @{[ACTION_RENAME]} @{[VSS_FILE]} tmp: `$tmp_mv' newpath: `$newpath' $!";
-                                }
-                            }
-                        } else {
-                            if (!$destroyed_files->{$row->{physname}}) {
-                                $repo->logrun(mv =>  $path,  $newpath);
-                            } else {
-                                if (!move($path, $newpath)) {
-                                    warn "UpdateGitRepository: @{[ACTION_RENAME]} @{[VSS_FILE]} path: `$path' newpath: `$newpath' $!";
-                                }
-                            }
-                        }
-                    }
-
-                    # remove the old path, add the new path
-                    @{$git_image->{$row->{physname}}} = grep {!/^\Q$path\E$/} @{$git_image->{$row->{physname}}};
-                    push @{$git_image->{$row->{physname}}}, $newpath;
-                    if ($destroyed_files->{$row->{physname}}) {
-                        &RewriteExcludes($path);
-                        &AppendExcludeEntry($newpath);
-                    }
-                }
-                when (@delete_actions) {
-                    # these are only recorded in the parent
-                    my $path_re = qr/^\Q$path\E$/;
-                    my $unlinked_file = 0;
-
-                    if (-f $path) {
-                        my ($link_ino, $path_ino);
-
-                        (undef, $link_ino) = stat($link_file);
-                        (undef, $path_ino) = stat($path);
-
-                        @{$git_image->{$row->{physname}}} = grep {!/$path_re/} @{$git_image->{$row->{physname}}};
-
-                        if (scalar @{$git_image->{$row->{physname}}} == 0) {
-                            say "UpdateGitRepository delete @{[VSS_FILE]}: deleting git image $row->{physname}" if $gCfg{debug};
-                            delete $git_image->{$row->{physname}};
-                        }
-
-                        # must check the inode at the path because:
-                        # file1 may be DELETEd, file2 ADDed, and file1 DESTROYed.
-                        if ($link_ino == $path_ino) {
-                            if (!defined $destroyed_files->{$row->{physname}}) {
-                                &GitRm($repo, $parentpath, $path, $row->{itemtype}, $row->{actiontype}, $row->{action_id});
-                            } else {
-                                unlink $path;
-                                $unlinked_file = 1;
-                            }
-                        } elsif ($row->{actiontype} eq ACTION_DESTROY) {
-                            my $action_id_del = &LastDeleteTime($row->{physname}, $row->{timestamp});
-                            my $delete_loc = File::Spec->catfile($gCfg{deleted}, $action_id_del);
-                            my $delete_loc_ino;
-
-                            (undef, $delete_loc_ino) = stat($delete_loc);
-                            if ($link_ino == $delete_loc_ino) {
-                                unlink $delete_loc;
-                            }
-                        }
-                    }
-
-                    # deleted files can be recovered, so it doesn't really affect the
-                    # link count
-                    if ($unlinked_file) {
-                        if ($destroyed_files->{$row->{physname}} <= 1) {
-                            delete $destroyed_files->{$row->{physname}};
-                        } else {
-                            --$destroyed_files->{$row->{physname}};
-                        }
-                        &RewriteExcludes($path);
-                    }
-                }
-                when (ACTION_RECOVER) {
-                    &GitRecover($repo, $row, $path, $git_image);
-                }
-                when (@restore_actions) {
-                    # XXX need example
-                    # I don't think anything needs to be done here anyway
-                    # but I could be mistaken.
-                }
-                when (ACTION_COMMIT) {
-                    # only recorded in the child
-                    my $is_destroyed;
-                    my $newver = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
-
-                    if (defined $newver) {
-
-                        if (!copy($newver, $link_file)) {
-                            warn "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} newver `$newver' path `$link_file' copy $!";
-                        } else {
-                            if (!$is_destroyed) {
                                 $repo->logrun(add => '--',  $path);
+                                &RemoveKeep($repo, $parentpath);
                             } else {
-                                if (!$destroyed_files->{$row->{physname}}) {
+                                &AppendExcludeEntry($path);
+                                ++$destroyed_files->{$row->{physname}};
+                            }
+                        }
+                    }
+                    when (ACTION_BRANCH) {
+                        # branches recorded in parent and child
+                        # no git action required
+                        my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
+
+                        if ($row->{parentdata}) {
+                            # set up bindings for the new branch
+                            my $using_li = (-f $link_info);
+                            my $p = ($using_li ? $link_info : $path);
+                            if (!copy($p, $link_file)) { # should create new file
+                                warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$p' link `$link_file' copy $!";
+                            } else {
+                                unlink $path; # decrement any link count
+                                link $link_file, $path; # add $path as the new link
+                                @{$git_image->{$row->{physname}}} = ("$path");
+                            }
+                            # shouldn't need to 'git add', it's a file with the same contents
+
+                            # remove bindings for the old one
+                            my $path_re = qr/^\Q$path\E$/;
+                            @{$git_image->{$row->{info}}} = grep {!/$path_re/} @{$git_image->{$row->{info}}};
+                            if (scalar @{$git_image->{$row->{info}}} == 0) {
+                                say "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]}: deleting git image $row->{info}" if $gCfg{debug};
+                                delete $git_image->{$row->{info}};
+                            }
+
+                            # remove the path from excludes, and add it again if needed
+                            &RewriteExcludes($path);
+                            if ($using_li && $destroyed_files->{$row->{info}}) {
+                                $destroyed_files->{$row->{physname}} = 1;
+                                &AppendExcludeEntry($path);
+                                if ($destroyed_files->{$row->{info}} >= 2) {
+                                    --$destroyed_files->{$row->{info}};
+                                }
+                            } elsif (!$using_li) {
+                                my $pathhash = $repo->logrun('hash-object' => '--', $path);
+                                if ($gCfg{destroyedHash} eq $pathhash) {
                                     $destroyed_files->{$row->{physname}} = 1;
                                     &AppendExcludeEntry($path);
                                 }
                             }
-                        }
-                    }
-                }
-                when (ACTION_SHARE) {
-                    # only recorded in parent (but present in child XML)
-                    my $oldpath = &SearchForPath($row->{physname}, $git_image);
-
-                    if (! -f $path) {
-                        link $oldpath, $path;
-                        push @{$git_image->{$row->{physname}}}, $path;
-                        if (!$destroyed_files->{$row->{physname}}) {
-                            $repo->logrun(add => '--',  $path);
-                            &RemoveKeep($repo, $parentpath);
-                        } else {
-                            &AppendExcludeEntry($path);
-                            ++$destroyed_files->{$row->{physname}};
-                        }
-                    }
-                }
-                when (ACTION_BRANCH) {
-                    # branches recorded in parent and child
-                    # no git action required
-                    my $link_info = File::Spec->catfile($gCfg{links}, $row->{info});
-
-                    if ($row->{parentdata}) {
-                        # set up bindings for the new branch
-                        my $using_li = (-f $link_info);
-                        my $p = ($using_li ? $link_info : $path);
-                        if (!copy($p, $link_file)) { # should create new file
-                            warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$p' link `$link_file' copy $!";
-                        } else {
-                            unlink $path; # decrement any link count
-                            link $link_file, $path; # add $path as the new link
-                            @{$git_image->{$row->{physname}}} = ("$path");
-                        }
-                        # shouldn't need to 'git add', it's a file with the same contents
-
-                        # remove bindings for the old one
-                        my $path_re = qr/^\Q$path\E$/;
-                        @{$git_image->{$row->{info}}} = grep {!/$path_re/} @{$git_image->{$row->{info}}};
-                        if (scalar @{$git_image->{$row->{info}}} == 0) {
-                            say "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]}: deleting git image $row->{info}" if $gCfg{debug};
-                            delete $git_image->{$row->{info}};
-                        }
-
-                        # remove the path from excludes, and add it again if needed
-                        &RewriteExcludes($path);
-                        if ($using_li && $destroyed_files->{$row->{info}}) {
-                            $destroyed_files->{$row->{physname}} = 1;
-                            &AppendExcludeEntry($path);
-                            if ($destroyed_files->{$row->{info}} >= 2) {
-                                --$destroyed_files->{$row->{info}};
+                        } elsif (! -f $link_file) {
+                            # for some reason, the parent info is missing
+                            # no parent info to link, just copy the link file
+                            if (!copy($link_info, $link_file)) { # should create new file
+                                warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} info `$link_info' link `$link_file' copy $!";
                             }
-                        } elsif (!$using_li) {
-                            my $pathhash = $repo->logrun('hash-object' => '--', $path);
-                            if ($gCfg{destroyedHash} eq $pathhash) {
+                            if ($destroyed_files->{$row->{info}}) {
                                 $destroyed_files->{$row->{physname}} = 1;
-                                &AppendExcludeEntry($path);
                             }
                         }
-                    } elsif (! -f $link_file) {
-                        # for some reason, the parent info is missing
-                        # no parent info to link, just copy the link file
-                        if (!copy($link_info, $link_file)) { # should create new file
-                            warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} info `$link_info' link `$link_file' copy $!";
+                    }
+                    when (ACTION_PIN) {
+                        my $is_destroyed;
+                        my $wrote_destroyed = 0;
+
+                        if (defined $row->{info}) {
+                            # this is an unpin
+                        } else {
+                            # this is a pin
+                            # There's not a really good way to do this, since
+                            # git doesn't suport this, nor do most Linux filesystems.
+                            # Find the old version and copy it over...
+                            my $efile = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
+                            $link_file .= $row->{version};
+                            if (defined $efile && ! -f $link_file) {
+                                if (!copy($efile, $link_file)) {
+                                    warn "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
+                                } else {
+                                    $wrote_destroyed = 1 if $is_destroyed;
+                                }
+                            }
                         }
-                        if ($destroyed_files->{$row->{info}}) {
+
+                        unlink $path if -f $path; # get rid of pinned/unpinned file
+                        link $link_file, $path;
+                        if (!$wrote_destroyed) {
+                            $repo->logrun(add => '--',  $path);
+                        } else {
                             $destroyed_files->{$row->{physname}} = 1;
+                            &AppendExcludeEntry($path);
                         }
                     }
-                }
-                when (ACTION_PIN) {
-                    my $is_destroyed;
-                    my $wrote_destroyed = 0;
-
-                    if (defined $row->{info}) {
-                        # this is an unpin
-                    } else {
-                        # this is a pin
-                        # There's not a really good way to do this, since
-                        # git doesn't suport this, nor do most Linux filesystems.
-                        # Find the old version and copy it over...
-                        my $efile = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
-                        $link_file .= $row->{version};
-                        if (defined $efile && ! -f $link_file) {
-                            if (!copy($efile, $link_file)) {
-                                warn "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
-                            } else {
-                                $wrote_destroyed = 1 if $is_destroyed;
-                            }
-                        }
+                    when (ACTION_LABEL) {
+                        &DeferLabel($row, $repo);
                     }
-
-                    unlink $path if -f $path; # get rid of pinned/unpinned file
-                    link $link_file, $path;
-                    if (!$wrote_destroyed) {
-                        $repo->logrun(add => '--',  $path);
-                    } else {
-                        $destroyed_files->{$row->{physname}} = 1;
-                        &AppendExcludeEntry($path);
-                    }
-                }
-                when (ACTION_LABEL) {
-                    &DeferLabel($row, $repo);
                 }
             }
         }
-    }
     };
 
     if ($@) {
