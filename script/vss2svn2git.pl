@@ -2695,6 +2695,7 @@ sub UpdateGitRepository {
     my @restore_actions = (ACTION_RESTORE, ACTION_RESTOREDPROJECT);
 
     eval {
+        my $warn_msg = "UpdateGitRepository: $row->{actiontype} $row->{itemtype} ";
         for ($row->{itemtype}) {
             when (VSS_PROJECT) {
                 for ($row->{actiontype}) {
@@ -2702,7 +2703,7 @@ sub UpdateGitRepository {
                         if (! -d $path) {
                             make_path($path);
                             if (!copy($gCfg{keepFile}, $path)) {
-                                warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_PROJECT]} copy $!";
+                                warn "$warn_msg copy $!";
                             } else {
                                 $git_image->{$row->{physname}} = $path;
                                 $repo->logrun(add => '--',  $path);
@@ -2772,7 +2773,7 @@ sub UpdateGitRepository {
                                                                                   undef, $row->{physname});
                                     if (!copy((($action_id) ? $gCfg{destroyedFile} : $gCfg{indeterminateFile}),
                                               $link_file)) {  # touch the file
-                                        warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!";
+                                        warn "$warn_msg path `$link_file' copy $!";
                                     }
                                     if ($action_id) {
                                         $destroyed_files->{$row->{physname}} = 1;
@@ -2797,7 +2798,7 @@ sub UpdateGitRepository {
                             if (defined $efile) {
                                 # copy the data to the link
                                 if (!copy($efile, $link_file)) {
-                                    warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
+                                    warn "$warn_msg export `$efile' path `$link_file' copy $!";
                                 } else {
                                     if (!$is_destroyed && !$destroyed_files->{$row->{physname}}) {
                                         $repo->logrun(add => '--',  $path);
@@ -2821,7 +2822,7 @@ sub UpdateGitRepository {
                             if (defined $efile) {
                                 # copy the data to the link
                                 if (!copy($efile, $link_file)) {
-                                    warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} export `$efile' link path `$link_file' copy $!";
+                                    warn "$warn_msg export `$efile' link path `$link_file' copy $!";
                                 }
                                 if ($is_destroyed) {
                                     $destroyed_files->{$row->{physname}} = 1;
@@ -2843,10 +2844,10 @@ sub UpdateGitRepository {
                                     $repo->logrun(mv =>  $tmp_mv,  $newpath);
                                 } else {
                                     if (!move($path, $tmp_mv)) {
-                                        warn "UpdateGitRepository: @{[ACTION_RENAME]} @{[VSS_FILE]} path: `$path' tmp: `$tmp_mv' $!";
+                                        warn "$warn_msg path: `$path' tmp: `$tmp_mv' $!";
                                     }
                                     if (!move($tmp_mv, $newpath)) {
-                                        warn "UpdateGitRepository: @{[ACTION_RENAME]} @{[VSS_FILE]} tmp: `$tmp_mv' newpath: `$newpath' $!";
+                                        warn "$warn_msg tmp: `$tmp_mv' newpath: `$newpath' $!";
                                     }
                                 }
                             } else {
@@ -2854,7 +2855,7 @@ sub UpdateGitRepository {
                                     $repo->logrun(mv =>  $path,  $newpath);
                                 } else {
                                     if (!move($path, $newpath)) {
-                                        warn "UpdateGitRepository: @{[ACTION_RENAME]} @{[VSS_FILE]} path: `$path' newpath: `$newpath' $!";
+                                        warn "$warn_msg path: `$path' newpath: `$newpath' $!";
                                     }
                                 }
                             }
@@ -2882,7 +2883,7 @@ sub UpdateGitRepository {
                             @{$git_image->{$row->{physname}}} = grep {!/$path_re/} @{$git_image->{$row->{physname}}};
 
                             if (scalar @{$git_image->{$row->{physname}}} == 0) {
-                                say "UpdateGitRepository delete @{[VSS_FILE]}: deleting git image $row->{physname}" if $gCfg{debug};
+                                say "$warn_msg deleting git image $row->{physname}" if $gCfg{debug};
                                 delete $git_image->{$row->{physname}};
                             }
 
@@ -2934,7 +2935,7 @@ sub UpdateGitRepository {
                         if (defined $newver) {
 
                             if (!copy($newver, $link_file)) {
-                                warn "UpdateGitRepository: @{[ACTION_COMMIT]} @{[VSS_FILE]} newver `$newver' path `$link_file' copy $!";
+                                warn "$warn_msg newver `$newver' path `$link_file' copy $!";
                             } else {
                                 if (!$is_destroyed) {
                                     $repo->logrun(add => '--',  $path);
@@ -2973,7 +2974,7 @@ sub UpdateGitRepository {
                             my $using_li = (-f $link_info);
                             my $p = ($using_li ? $link_info : $path);
                             if (!copy($p, $link_file)) { # should create new file
-                                warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} path `$p' link `$link_file' copy $!";
+                                warn "$warn_msg path `$p' link `$link_file' copy $!";
                             } else {
                                 unlink $path; # decrement any link count
                                 link $link_file, $path; # add $path as the new link
@@ -2985,7 +2986,7 @@ sub UpdateGitRepository {
                             my $path_re = qr/^\Q$path\E$/;
                             @{$git_image->{$row->{info}}} = grep {!/$path_re/} @{$git_image->{$row->{info}}};
                             if (scalar @{$git_image->{$row->{info}}} == 0) {
-                                say "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]}: deleting git image $row->{info}" if $gCfg{debug};
+                                say "$warn_msg deleting git image $row->{info}" if $gCfg{debug};
                                 delete $git_image->{$row->{info}};
                             }
 
@@ -3008,7 +3009,7 @@ sub UpdateGitRepository {
                             # for some reason, the parent info is missing
                             # no parent info to link, just copy the link file
                             if (!copy($link_info, $link_file)) { # should create new file
-                                warn "UpdateGitRepository: @{[ACTION_BRANCH]} @{[VSS_FILE]} info `$link_info' link `$link_file' copy $!";
+                                warn "$warn_msg info `$link_info' link `$link_file' copy $!";
                             }
                             if ($destroyed_files->{$row->{info}}) {
                                 $destroyed_files->{$row->{physname}} = 1;
@@ -3030,7 +3031,7 @@ sub UpdateGitRepository {
                             $link_file .= $row->{version};
                             if (defined $efile && ! -f $link_file) {
                                 if (!copy($efile, $link_file)) {
-                                    warn "UpdateGitRepository: @{[ACTION_PIN]} @{[VSS_FILE]} export `$efile' path `$link_file' copy $!";
+                                    warn "$warn_msg export `$efile' path `$link_file' copy $!";
                                 } else {
                                     $wrote_destroyed = 1 if $is_destroyed;
                                 }
