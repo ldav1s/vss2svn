@@ -1228,7 +1228,15 @@ EOSQL
 # missing comment data for parents in PhysicalAction
 ###############################################################################
 sub FixupParentActions {
-    my $sql = <<"EOSQL";
+
+    $gCfg{resume} = 0;
+
+    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+    eval {
+        # Fill in comment data for parents.  This makes it easier
+        # to group them into changesets.  There's probably a better
+        # way of doing this, but this is easy.
+        my $sql = <<"EOSQL";
 SELECT B.comment AS comment, A.action_id AS action_id
 FROM (SELECT X.physname AS physname, X.action_id AS action_id
       FROM PhysicalAction AS X, PhysItemtype AS Y
@@ -1243,35 +1251,25 @@ NATURAL JOIN (SELECT X.physname AS physname, X.comment AS comment
               AND X.parentdata = 0
               AND X.actiontype = '@{[ACTION_ADD]}') AS B
 EOSQL
-    my $sth = $gCfg{dbh}->prepare($sql);
-    my $tth = $gCfg{dbh}->prepare('UPDATE PhysicalAction '
-                                  .'SET comment = ? '
-                                  .'WHERE action_id = ? '
-                                  .'AND comment IS NULL ');
-    my $row;
 
-    foreach my $type (VSS_PROJECT, VSS_FILE) {
-        $sth->execute($type, $type);
+        my $sth = $gCfg{dbh}->prepare($sql);
+        my $tth = $gCfg{dbh}->prepare('UPDATE PhysicalAction '
+                                      .'SET comment = ? '
+                                      .'WHERE action_id = ? '
+                                      .'AND comment IS NULL ');
+        my $row;
 
-        $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
-        eval {
+        foreach my $type (VSS_PROJECT, VSS_FILE) {
+            $sth->execute($type, $type);
+
             while (defined($row = $sth->fetchrow_hashref() )) {
                 $tth->execute($row->{comment}, $row->{action_id});
             }
-        };
-
-        if ($@) {
-            warn "Transaction aborted because $@";
-            eval { $gCfg{dbh}->rollback };
-            die "Failed to fix up ADDs";
-        } else {
-            $gCfg{dbh}->commit;
         }
-    }
 
-    # timestamp seems to be earlier in child than parent
-    # give each SHARE/BRANCH a little wiggle room timestamp-wise
-    $sql = <<"EOSQL";
+        # timestamp seems to be earlier in child than parent
+        # give each SHARE/BRANCH a little wiggle room timestamp-wise
+        $sql = <<"EOSQL";
 SELECT B.comment AS comment, A.action_id AS action_id
 FROM (SELECT X.info AS info, X.action_id AS action_id, X.timestamp AS timestamp
       FROM PhysicalAction AS X, PhysItemtype AS Y
@@ -1287,34 +1285,23 @@ INNER JOIN (SELECT X.info AS info, X.comment AS comment, X.timestamp AS timestam
               AND X.actiontype = '@{[ACTION_BRANCH]}') AS B
 ON A.info = B.info AND A.timestamp BETWEEN B.timestamp-@{[TIMESTAMP_DELTA]} AND B.timestamp+@{[TIMESTAMP_DELTA]}
 EOSQL
-    $sth = $gCfg{dbh}->prepare($sql);
-    $tth = $gCfg{dbh}->prepare('UPDATE PhysicalAction '
-                               . 'SET comment = ? '
-                               . 'WHERE action_id = ? '
-                               . "AND comment IS NULL");
 
-    $sth->execute();
+        $sth = $gCfg{dbh}->prepare($sql);
+        $tth = $gCfg{dbh}->prepare('UPDATE PhysicalAction '
+                                   . 'SET comment = ? '
+                                   . 'WHERE action_id = ? '
+                                   . "AND comment IS NULL");
+        $sth->execute();
 
-    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
-    eval {
         while (defined($row = $sth->fetchrow_hashref() )) {
             $tth->execute($row->{comment}, $row->{action_id});
         }
-    };
 
-    if ($@) {
-        warn "Transaction aborted because $@";
-        eval { $gCfg{dbh}->rollback };
-        die "Failed to fix up BRANCHes";
-    } else {
-        $gCfg{dbh}->commit;
-    }
-
-    # When a VSS_PROJECT is moved, it duplicates the ADD from the
-    # project that contained the moved project before the move.
-    # This is bad for our move implementation,
-    # so scrap these non-parentdata ADD records.
-$sql = <<"EOSQL";
+        # When a VSS_PROJECT is moved, it duplicates the ADD from the
+        # project that contained the moved project before the move.
+        # This is bad for our move implementation,
+        # so scrap these non-parentdata ADD records.
+        $sql = <<"EOSQL";
 DELETE FROM PhysicalAction
 WHERE action_id IN
 (SELECT C.action_id AS action_id
@@ -1339,7 +1326,18 @@ INNER JOIN (SELECT X.action_id AS action_id, X.physname AS physname
       AND Y.itemtype = @{[VSS_PROJECT]}) AS C
 USING (physname))
 EOSQL
-    $gCfg{dbh}->do($sql);
+
+        $gCfg{dbh}->do($sql);
+    };
+
+    if ($@) {
+        warn "Transaction aborted because $@";
+    eval { $gCfg{dbh}->rollback };
+        die "Failed to fix up parents";
+    } else {
+        &SetSystemTask( $gCfg{next_task}->{task} );
+        $gCfg{dbh}->commit;
+    }
 
     1;
 }
