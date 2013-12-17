@@ -225,6 +225,9 @@ my @system_info_params = (
     { 'tempdir' => 'VARCHAR' },
     { 'starttime' => 'VARCHAR' },
     { 'gpvh_physname' => 'VARCHAR' }, # checkpoint for GetPhysVssHistory
+    { 'gri_git_head' => 'VARCHAR' }, # checkpoints for GetReadImage
+    { 'gri_timestamp' => 'INTEGER' },
+    { 'gri_next_update' => 'INTEGER' },
     );
 
 &Initialize;
@@ -823,18 +826,13 @@ sub TestGitAuthorInfo {
 sub GitReadImage {
     # Read the physical actions, and perform them on the repository
 
-    my($sth, $tth, $rows);
-    my ($last_time);
-
-
     my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
-
     $repo->setlog($gCfg{debug});
 
     # phys_ac_count is only the maximum
     my ($phys_ac_count) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalAction');
     my $progress;
-    my $next_update = 0;
+    my $next_update;
 
     if (!($gCfg{debug} || $gCfg{verbose})) {
         $progress = Term::ProgressBar->new({name  => 'Actions',
@@ -844,34 +842,52 @@ sub GitReadImage {
     }
 
 
-    $last_time = $gCfg{mintime};
-    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
-
-    $tth = $gCfg{dbh}->prepare('SELECT MIN(timestamp) FROM PhysicalAction WHERE timestamp > ?');
+    my $head_id;
+    my $last_time;
+    my $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
+    my $tth = $gCfg{dbh}->prepare('SELECT MIN(timestamp) FROM PhysicalAction WHERE timestamp > ?');
 
     my $it_sth = $gCfg{dbh}->prepare('SELECT itemtype FROM PhysItemtype WHERE physname = ?');
+    my $cp_sth = $gCfg{dbh}->prepare('UPDATE SystemInfo SET gri_timestamp = ?, gri_git_head = ?, gri_next_update = ?');
 
-    my $dump_cnt = 0;
+    if ($gCfg{resume}) {
+        $last_time = $gCfg{gri_timestamp};
+        $head_id = $gCfg{gri_git_head};
+        $next_update = $gCfg{gri_next_update};
+        $repo->logrun('reset' => '--hard', $head_id);
+        $gCfg{resume} = 0;
+    } else {
+        $last_time = $gCfg{mintime};
+        $head_id = $repo->logrun('rev-parse' => 'HEAD');
+        $next_update = 0;
+
+        # checkpoint now
+        $cp_sth->execute($last_time, $head_id, $next_update);
+    }
+
+    my $dump_cnt = $next_update;
     while ($last_time < $gCfg{maxtime}) {
         my ($username, $comment);
 
         say "timestamp: $last_time" if $gCfg{verbose};
 
-        &SchedulePhysicalActions($last_time);
+        $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+        eval {
+            &SchedulePhysicalActions($last_time);
 
-        $sth->execute();
-        $rows = $sth->fetchall_arrayref( {} );
+            $sth->execute();
+            my $rows = $sth->fetchall_arrayref( {} );
 
-        undef $username;
+            undef $username;
 
-        # It's not an error to have 0 scheduled rows
+            # It's not an error to have 0 scheduled rows
 
-        foreach my $row (@$rows) {
-            $last_time = $row->{timestamp};
-            $username = $row->{author};
-            $comment = $row->{comment};
+            foreach my $row (@$rows) {
+                $last_time = $row->{timestamp};
+                $username = $row->{author};
+                $comment = $row->{comment};
 
-            my ($path, $parentpath);
+                my ($path, $parentpath);
 
 #            if ($dump_cnt % 100 == 0) {
 #                say "git_image: " . Dumper(\%git_image) if $gCfg{debug};
@@ -880,50 +896,61 @@ sub GitReadImage {
 #                    exit(0);
 #                }
 #            }
-            ++$dump_cnt;
+                ++$dump_cnt;
 
-            $it_sth->execute($row->{physname});
-            ($row->{itemtype}) = $it_sth->fetchrow_array();
+                $it_sth->execute($row->{physname});
+                ($row->{itemtype}) = $it_sth->fetchrow_array();
 
-            if (defined $row->{parentphys}) {
-                say "parentphys: $row->{parentphys} "
-                    . "physname: $row->{physname} "
-                    . "timestamp: $row->{timestamp}" if $gCfg{debug};
-                $parentpath = $git_image{$row->{parentphys}};
-                $path = ($row->{itemtype} == VSS_PROJECT)
-                    ? File::Spec->catdir($parentpath, $row->{itemname})
-                    : File::Spec->catfile($parentpath, $row->{itemname});
-            } else {
-                # presumably this is a child entry
-                # pick a path to update
-                if (defined $row->{physname}
-                    && defined $git_image{$row->{physname}}) {
-                    $path = @{$git_image{$row->{physname}}}[0];
-                    $parentpath = dirname($path);
+                if (defined $row->{parentphys}) {
+                    say "parentphys: $row->{parentphys} "
+                        . "physname: $row->{physname} "
+                        . "timestamp: $row->{timestamp}" if $gCfg{debug};
+                    $parentpath = $git_image{$row->{parentphys}};
+                    $path = ($row->{itemtype} == VSS_PROJECT)
+                        ? File::Spec->catdir($parentpath, $row->{itemname})
+                        : File::Spec->catfile($parentpath, $row->{itemname});
+                } else {
+                    # presumably this is a child entry
+                    # pick a path to update
+                    if (defined $row->{physname}
+                        && defined $git_image{$row->{physname}}) {
+                        $path = @{$git_image{$row->{physname}}}[0];
+                        $parentpath = dirname($path);
+                    }
                 }
+
+                &UpdateGitRepository($row, $parentpath, $path, \%git_image, $repo);
             }
 
-            &UpdateGitRepository($row, $parentpath, $path, \%git_image, $repo);
+            if (defined $username) {
+                &GitCommit($repo, $comment, $username, $last_time);
+                ++$gCfg{commit_id};
+                $head_id = $repo->logrun('rev-parse' => 'HEAD');
+
+                # write the checkpoint
+                $cp_sth->execute($last_time, $head_id, $next_update);
+            }
+
+            # get the next changeset
+            if ($last_time < $gCfg{maxtime}) {
+                $tth->execute($last_time);
+                $last_time = $tth->fetchall_arrayref()->[0][0];
+            }
+
+            # Retire old data
+            $gCfg{dbh}->do("INSERT INTO PhysicalActionRetired "
+                           ."SELECT NULL AS retired_id, "
+                           . "$gCfg{commit_id} AS commit_id, * FROM PhysicalActionSchedule "
+                           . "ORDER BY schedule_id");
+            $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
+        };
+        if ($@) {
+            warn "Transaction aborted because $@";
+            eval { $gCfg{dbh}->rollback };
+            die "Failed to load name lookup table";
+        } else {
+            $gCfg{dbh}->commit;
         }
-
-        if (defined $username) {
-            &GitCommit($repo, $comment, $username, $last_time);
-            ++$gCfg{commit_id};
-        }
-
-        # get the next changeset
-        if ($last_time < $gCfg{maxtime}) {
-            $tth->execute($last_time);
-            $last_time = $tth->fetchall_arrayref()->[0][0];
-
-        }
-
-        # Retire old data
-        $gCfg{dbh}->do("INSERT INTO PhysicalActionRetired "
-                       ."SELECT NULL AS retired_id, "
-                       . "$gCfg{commit_id} AS commit_id, * FROM PhysicalActionSchedule "
-                       . "ORDER BY schedule_id");
-        $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
 
         if (defined $progress) {
             $next_update = $progress->update($dump_cnt)
@@ -2396,25 +2423,16 @@ sub CheckAffinity {
 
             if (!(@oids ~~ @iids)) {
                 say "affinity changed" if $gCfg{debug};
-                $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
-                eval {
-                    my $i = 0;
-                    foreach my $o (@oids) {
-                        my $m = $ino_data->[$i];
-                        if ($o != $m->{schedule_id}) {
-                            $gCfg{dbh}->do("UPDATE tmp_affinity SET schedule_id = $o "
-                                           . "WHERE schedule_id = $m->{schedule_id} "
-                                           ."AND action_id = $m->{action_id}");
-                        }
-                        ++$i;
+
+                my $i = 0;
+                foreach my $o (@oids) {
+                    my $m = $ino_data->[$i];
+                    if ($o != $m->{schedule_id}) {
+                        $gCfg{dbh}->do("UPDATE tmp_affinity SET schedule_id = $o "
+                                       . "WHERE schedule_id = $m->{schedule_id} "
+                                       ."AND action_id = $m->{action_id}");
                     }
-                };
-                if ($@) {
-                    warn "Transaction aborted because $@";
-                    eval { $gCfg{dbh}->rollback };
-                    die "Failed to update affinity at time $timestamp";
-                } else {
-                    $gCfg{dbh}->commit;
+                    ++$i;
                 }
 
                 # clear out the out of order records
