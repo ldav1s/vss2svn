@@ -243,7 +243,6 @@ my @system_info_params = (
 sub RunConversion {
 
 
-    my $info;
     my $taskmap = {};
     my $i = 0;
     my $task_name_sz = 0;
@@ -257,9 +256,10 @@ sub RunConversion {
         unless defined $taskmap->{$gCfg{task}};
 
     for ($i = $taskmap->{$gCfg{task}}; $i <= $taskmap->{"@{[TASK_DONE]}"}; ++$i) {
-        $info = $joblist[$i];
+        $gCfg{current_task} = $joblist[$i];
+        $gCfg{next_task} = ($i != $taskmap->{"@{[TASK_DONE]}"}) ? $joblist[$i+1] : $joblist[$i];
 
-        &SetSystemTask( $info->{task} );
+        &SetSystemTask( $gCfg{current_task}->{task} );
         say sprintf("TASK: %*s: %s", $task_name_sz, $gCfg{task},
                     POSIX::strftime(ISO8601_FMT . "\n", localtime));
 
@@ -269,16 +269,19 @@ sub RunConversion {
             die if $temp =~ m/^quit/i;
         }
 
-        if (!defined $gCfg{mintime} && !defined $gCfg{maxtime}
-            && $i >= $taskmap->{"@{[TASK_GITREAD]}"}) {
-            &TimestampLimits;
-            if (!defined $gCfg{mintime} || !defined $gCfg{maxtime}) {
-                warn "There doesn't seem to be any physical action data";
+        if ($i >= $taskmap->{"@{[TASK_GITREAD]}"}) {
+            if (!defined $gCfg{mintime} && !defined $gCfg{maxtime}) {
+                &TimestampLimits;
+                if (!defined $gCfg{mintime} || !defined $gCfg{maxtime}) {
+                    warn "There doesn't seem to be any physical action data";
+                }
             }
-            &DestroyedHash;
+            if (!defined $gCfg{destroyedHash}) {
+                &DestroyedHash;
+            }
         }
 
-        &{ $info->{handler} };
+        &{ $gCfg{current_task}->{handler} };
     }
 
 }  #  End RunConversion
@@ -291,8 +294,9 @@ sub LoadVssNames {
                File::Spec->catdir($gCfg{vssdatadir}, 'names.dat'));
     &DoSsCmd(@cmd);
 
-    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+    $gCfg{resume} = 0;
 
+    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
     eval {
         my $xmldoc = XML::LibXML->load_xml(string => $gSysOut);
 
@@ -335,6 +339,7 @@ sub LoadVssNames {
         eval { $gCfg{dbh}->rollback };
         die "Failed to load name lookup table";
     } else {
+        &SetSystemTask( $gCfg{next_task}->{task} );
         $gCfg{dbh}->commit;
     }
 
@@ -356,8 +361,9 @@ sub FindPhysDbFiles {
 
     my $sth = $gCfg{dbh}->prepare("INSERT INTO Physical (physname, datapath) VALUES (?, ?)");
 
-    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+    $gCfg{resume} = 0;
 
+    $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
     eval {
         my $vssdb_cnt = 0;
         my @dirs = ($gCfg{vssdatadir});
@@ -385,6 +391,7 @@ sub FindPhysDbFiles {
         eval { $gCfg{dbh}->rollback };
         die "Failed to load physical table";
     } else {
+        &SetSystemTask( $gCfg{next_task}->{task} );
         $gCfg{dbh}->commit;
     }
 
