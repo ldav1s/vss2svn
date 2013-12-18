@@ -3307,15 +3307,16 @@ sub RemoveKeep {
 
 sub LastDeleteTime {
     my($physname, $timestamp) = @_;
-    my ($action_id_del) =  $gCfg{dbh}->selectrow_array("SELECT action_id "
-                                                       . "FROM PhysicalAction "
-                                                       . "WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
-                                                       . "AND timestamp =  "
-                                                       . "(SELECT MAX(timestamp) "
-                                                       . " FROM PhysicalAction "
-                                                       . " WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
-                                                       . " AND timestamp < ?)",
-                                                       undef, $physname, $physname, $timestamp);
+    my $tmp_sth = $gCfg{dbh}->prepare_cached("SELECT action_id "
+                                              . "FROM PhysicalAction "
+                                              . "WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
+                                              . "AND timestamp =  "
+                                              . "(SELECT MAX(timestamp) "
+                                              . " FROM PhysicalAction "
+                                              . " WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
+                                              . " AND timestamp < ?)");
+    $tmp_sth->execute($physname, $physname, $timestamp);
+    my ($action_id_del) = $tmp_sth->fetchrow_array();
     return $action_id_del;
 }
 
