@@ -2358,28 +2358,30 @@ sub CheckAffinity {
     # Sometimes when rows share a timestamp, it's
     # obvious when looking at other fields (author, comment)
     # that they should be reordered
-    my $ath = $gCfg{dbh}->prepare('SELECT DISTINCT timestamp '
-                                  . 'FROM PhysicalActionSchedule '
-                                  . 'ORDER BY timestamp');
+    my $ath = $gCfg{dbh}->prepare_cached('SELECT DISTINCT timestamp '
+                                         . 'FROM PhysicalActionSchedule '
+                                         . 'ORDER BY timestamp');
     $ath->execute();
     my $timestamps = $ath->fetchall_arrayref();
     foreach my $t (@$timestamps) {
         my $timestamp = $t->[0];
         my $rowcount;
+        my $tmp_sth = $gCfg{dbh}->prepare_cached('SELECT COUNT(*) FROM PhysicalActionSchedule '
+                                                 . ' WHERE timestamp = ? ORDER BY schedule_id');
+        $tmp_sth->execute($timestamp);
+        ($rowcount) = $tmp_sth->fetchrow_array();
 
-        ($rowcount) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalActionSchedule '
-                                                  . ' WHERE timestamp = ? ORDER BY schedule_id',
-                                                  undef,
-                                                  $timestamp);
         if ($rowcount > 1) {
-            $sth = $gCfg{dbh}->prepare('CREATE TEMPORARY TABLE tmp_affinity AS '
-                                       . ' SELECT 0 AS affinity, * FROM PhysicalActionSchedule '
-                                       . ' WHERE timestamp = ? ORDER BY schedule_id');
+            $sth = $gCfg{dbh}->prepare_cached('CREATE TEMPORARY TABLE tmp_affinity AS '
+                                              . ' SELECT 0 AS affinity, * FROM PhysicalActionSchedule '
+                                              . ' WHERE timestamp = ? ORDER BY schedule_id');
+            my $d_sth = $gCfg{dbh}->prepare_cached('DROP TABLE tmp_affinity');
+
             $sth->execute($timestamp);
 
             # grab identifying data
-            $sth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id '
-                                       . 'FROM tmp_affinity ORDER BY schedule_id');
+            $sth = $gCfg{dbh}->prepare_cached('SELECT schedule_id, action_id '
+                                              . 'FROM tmp_affinity ORDER BY schedule_id');
             $sth->execute();
             my $ooo_data = $sth->fetchall_arrayref({});
 
@@ -2388,14 +2390,14 @@ sub CheckAffinity {
 
             # check affinity with timestamp not equal to this one
             # of previously scheduled row
-            $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
-                                       . 'WHERE schedule_id = '
-                                       . '   (SELECT MAX(schedule_id) '
-                                       . '    FROM PhysicalActionSchedule '
-                                       . '    WHERE timestamp = '
-                                       . '          (SELECT MAX(timestamp) '
-                                       . '           FROM PhysicalActionSchedule '
-                                       . '           WHERE timestamp < ?)) LIMIT 1');
+            $sth = $gCfg{dbh}->prepare_cached('SELECT * FROM PhysicalActionSchedule '
+                                              . 'WHERE schedule_id = '
+                                              . '   (SELECT MAX(schedule_id) '
+                                              . '    FROM PhysicalActionSchedule '
+                                              . '    WHERE timestamp = '
+                                              . '          (SELECT MAX(timestamp) '
+                                              . '           FROM PhysicalActionSchedule '
+                                              . '           WHERE timestamp < ?)) LIMIT 1');
             $sth->execute($timestamp);
             my $lrow;
             while (defined($lrow = $sth->fetchrow_hashref())) {
@@ -2405,23 +2407,23 @@ sub CheckAffinity {
             # check affinity with timestamp not equal to this one
             # of next row. This operation might not be a good idea --
             # these really aren't scheduled yet!
-            $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule '
-                                       . 'WHERE schedule_id = '
-                                       . '   (SELECT MIN(schedule_id) '
-                                       . '    FROM PhysicalActionSchedule '
-                                       . '    WHERE timestamp = '
-                                       . '          (SELECT MIN(timestamp) '
-                                       . '           FROM PhysicalActionSchedule '
-                                       . '           WHERE timestamp > ?)) LIMIT 1');
+            $sth = $gCfg{dbh}->prepare_cached('SELECT * FROM PhysicalActionSchedule '
+                                              . 'WHERE schedule_id = '
+                                              . '   (SELECT MIN(schedule_id) '
+                                              . '    FROM PhysicalActionSchedule '
+                                              . '    WHERE timestamp = '
+                                              . '          (SELECT MIN(timestamp) '
+                                              . '           FROM PhysicalActionSchedule '
+                                              . '           WHERE timestamp > ?)) LIMIT 1');
             $sth->execute($timestamp);
             while (defined($lrow = $sth->fetchrow_hashref())) {
                 &UpdateRowAffinity($lrow,1);
             }
 
             # sort using affinity first
-            $sth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id '
-                                       . 'FROM tmp_affinity '
-                                       . 'ORDER BY affinity ASC, schedule_id ASC');
+            $sth = $gCfg{dbh}->prepare_cached('SELECT schedule_id, action_id '
+                                              . 'FROM tmp_affinity '
+                                              . 'ORDER BY affinity ASC, schedule_id ASC');
             $sth->execute();
             my $ino_data = $sth->fetchall_arrayref({});
 
@@ -2431,14 +2433,15 @@ sub CheckAffinity {
 
             if (!(@oids ~~ @iids)) {
                 say "affinity changed" if $gCfg{debug};
+                $tmp_sth = $gCfg{dbh}->prepare_cached("UPDATE tmp_affinity SET schedule_id = ? "
+                                                      ."WHERE schedule_id = ? "
+                                                      ."AND action_id = ?");
 
                 my $i = 0;
                 foreach my $o (@oids) {
                     my $m = $ino_data->[$i];
                     if ($o != $m->{schedule_id}) {
-                        $gCfg{dbh}->do("UPDATE tmp_affinity SET schedule_id = $o "
-                                       . "WHERE schedule_id = $m->{schedule_id} "
-                                       ."AND action_id = $m->{action_id}");
+                        $tmp_sth->execute($o, $m->{schedule_id}, $m->{action_id});
                     }
                     ++$i;
                 }
@@ -2459,7 +2462,7 @@ sub CheckAffinity {
                 $gCfg{dbh}->do("INSERT INTO PhysicalActionSchedule "
                                . "SELECT $pas_params_sql FROM tmp_affinity");
             }
-            $gCfg{dbh}->do('DROP TABLE tmp_affinity');
+            $d_sth->execute();
         }
     }
 }
