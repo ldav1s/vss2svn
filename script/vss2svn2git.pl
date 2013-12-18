@@ -2304,30 +2304,36 @@ sub SchedulePhysicalActions {
     # fixed here, if possible.
 
     # PhysicalActionSchedule should be empty at this point
-
-    my ($changeset_count) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalActionChangeset');
-    my $sth = $gCfg{dbh}->prepare('INSERT INTO PhysicalActionSchedule '
-                                  . 'SELECT NULL AS schedule_id, * '
-                                  . 'FROM PhysicalAction '
-                                  . 'WHERE timestamp >= ? '
-                                  . '  AND timestamp < ? '
-                                  . '  AND action_id NOT IN '
-                                  . '  (SELECT action_id FROM PhysicalActionSchedule '
-                                  . '   UNION ALL SELECT action_id FROM PhysicalActionRetired '
-                                  . '   UNION ALL SELECT action_id FROM PhysicalActionDiscarded) '
-                                  . 'ORDER BY timestamp ASC, priority ASC, '
-                                  . 'vss_phys_to_num(physname) ASC, parentdata ASC');
+    my $tmp_sth = $gCfg{dbh}->prepare_cached('SELECT COUNT(*) FROM PhysicalActionChangeset');
+    $tmp_sth->execute();
+    my ($changeset_count) = $tmp_sth->fetchrow_array();
+    my $sth = $gCfg{dbh}->prepare_cached('INSERT INTO PhysicalActionSchedule '
+                                         . 'SELECT NULL AS schedule_id, * '
+                                         . 'FROM PhysicalAction '
+                                         . 'WHERE timestamp >= ? '
+                                         . '  AND timestamp < ? '
+                                         . '  AND action_id NOT IN '
+                                         . '  (SELECT action_id FROM PhysicalActionSchedule '
+                                         . '   UNION ALL SELECT action_id FROM PhysicalActionRetired '
+                                         . '   UNION ALL SELECT action_id FROM PhysicalActionDiscarded) '
+                                         . 'ORDER BY timestamp ASC, priority ASC, '
+                                         . 'vss_phys_to_num(physname) ASC, parentdata ASC');
     if (defined $changeset_count && $changeset_count > 0) {
         # We have unused data from the last scheduling pass, let's use it.
-        $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
-                       . 'SELECT * FROM PhysicalActionChangeset');
-        $gCfg{dbh}->do('DELETE FROM PhysicalActionChangeset');
+        $tmp_sth = $gCfg{dbh}->prepare_cached('INSERT INTO PhysicalActionSchedule '
+                                              . 'SELECT * FROM PhysicalActionChangeset');
+        my $tmp2_sth = $gCfg{dbh}->prepare_cached('DELETE FROM PhysicalActionChangeset');
+
+        $tmp_sth->execute();
+        $tmp2_sth->execute();
 
         # need to reset time, since there may be two commits in the same timestamp
-        ($timestamp) = $gCfg{dbh}->selectrow_array('SELECT timestamp '
-                                                   . 'FROM PhysicalActionSchedule '
-                                                   . 'WHERE schedule_id = '
-                                                   . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
+        $tmp_sth = $gCfg{dbh}->prepare_cached('SELECT timestamp '
+                                              . 'FROM PhysicalActionSchedule '
+                                              . 'WHERE schedule_id = '
+                                              . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
+        $tmp_sth->execute();
+        ($timestamp) = $tmp_sth->fetchrow_array();
     }
 
     # This slides the window down.
