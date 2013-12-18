@@ -2473,25 +2473,28 @@ sub CheckAffinity {
 sub UpdateRowAffinity {
     my ($lrow, $direction) = @_;
 
-    my $rth = $gCfg{dbh}->prepare("UPDATE tmp_affinity SET affinity = affinity+$direction WHERE author = ?");
-    $rth->execute($lrow->{author});
+    my $rth = $gCfg{dbh}->prepare_cached('UPDATE tmp_affinity SET affinity = affinity+? WHERE author = ?');
+    $rth->execute($direction, $lrow->{author});
 
     if (defined $lrow->{comment}) {
-        $rth = $gCfg{dbh}->prepare("UPDATE tmp_affinity SET affinity = affinity+$direction WHERE comment = ?");
-        $rth->execute($lrow->{comment});
+        $rth = $gCfg{dbh}->prepare_cached('UPDATE tmp_affinity SET affinity = affinity+? WHERE comment = ?');
+        $rth->execute($direction, $lrow->{comment});
     } else {
-        $gCfg{dbh}->do("UPDATE tmp_affinity SET affinity = affinity+$direction WHERE comment IS NULL");
+        $rth = $gCfg{dbh}->prepare_cached('UPDATE tmp_affinity SET affinity = affinity+? WHERE comment IS NULL');
+        $rth->execute($direction);
     }
 
     if ($lrow->{actiontype} eq ACTION_LABEL) {
-        ($lrow->{label}) = $gCfg{dbh}->selectrow_array('SELECT label FROM PhysLabel WHERE action_id = ?',
-                                                       undef, $lrow->{action_id});
+        $rth = $gCfg{dbh}->prepare_cached('SELECT label FROM PhysLabel WHERE action_id = ?');
+        $rth->execute($lrow->{action_id});
+        ($lrow->{label}) = $rth->fetchrow_array();
+
         if (defined $lrow->{label}) {
             my $d2 = $direction*2; # more heavily weight these
-            $rth = $gCfg{dbh}->prepare("UPDATE tmp_affinity SET affinity = affinity+$d2 "
-                                       . "WHERE actiontype = '@{[ACTION_LABEL]}' "
-                                       . "AND action_id IN (SELECT action_id FROM PhysLabel WHERE label = ?)");
-            $rth->execute($lrow->{label});
+            $rth = $gCfg{dbh}->prepare_cached("UPDATE tmp_affinity SET affinity = affinity+? "
+                                              . "WHERE actiontype = '@{[ACTION_LABEL]}' "
+                                              . "AND action_id IN (SELECT action_id FROM PhysLabel WHERE label = ?)");
+            $rth->execute($d2, $lrow->{label});
         }
     }
  }
