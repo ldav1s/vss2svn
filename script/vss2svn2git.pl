@@ -849,6 +849,11 @@ sub GitReadImage {
 
     my $it_sth = $gCfg{dbh}->prepare('SELECT itemtype FROM PhysItemtype WHERE physname = ?');
     my $cp_sth = $gCfg{dbh}->prepare('UPDATE SystemInfo SET gri_timestamp = ?, gri_git_head = ?, gri_next_update = ?');
+    my $d_sth = $gCfg{dbh}->prepare('DELETE FROM PhysicalActionSchedule');
+    my $r_sth = $gCfg{dbh}->prepare('INSERT INTO PhysicalActionRetired '
+                                    . 'SELECT NULL AS retired_id, '
+                                    . '? AS commit_id, * FROM PhysicalActionSchedule '
+                                    . 'ORDER BY schedule_id');
 
     if ($gCfg{resume}) {
         $last_time = $gCfg{gri_timestamp};
@@ -938,11 +943,8 @@ sub GitReadImage {
             }
 
             # Retire old data
-            $gCfg{dbh}->do("INSERT INTO PhysicalActionRetired "
-                           ."SELECT NULL AS retired_id, "
-                           . "$gCfg{commit_id} AS commit_id, * FROM PhysicalActionSchedule "
-                           . "ORDER BY schedule_id");
-            $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
+            $r_sth->execute($gCfg{commit_id});
+            $d_sth->execute();
         };
         if ($@) {
             warn "Transaction aborted because $@";
