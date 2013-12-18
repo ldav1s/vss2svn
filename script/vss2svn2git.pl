@@ -3368,7 +3368,7 @@ sub GitRecover {
                     } else {
                         # no history backup, fake it
                         if (!copy($gCfg{destroyedFile}, $link_file)) {  # touch the file
-                            warn "UpdateGitRepository: @{[ACTION_ADD]} @{[VSS_FILE]} path `$link_file' copy $!";
+                            warn "GitRecover: copy destroyed file path `$link_file' copy $!";
                         } else {
                             $is_destroyed = 1;
                             link $link_file, $path;
