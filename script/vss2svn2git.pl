@@ -3325,11 +3325,12 @@ sub GitRecover {
     my($repo, $row, $path, $git_image) = @_;
 
     my $is_destroyed = 0;
-    my ($action_id) = $gCfg{dbh}->selectrow_array("SELECT action_id "
-                                                  . "FROM PhysicalAction "
-                                                  . "WHERE physname = ? AND actiontype = '@{[ACTION_DESTROY]}' "
-                                                  . "LIMIT 1", # just in case
-                                                  undef, $row->{physname});
+    my $tmp_sth = $gCfg{dbh}->prepare_cached("SELECT action_id "
+                                             . "FROM PhysicalAction "
+                                             . "WHERE physname = ? AND actiontype = '@{[ACTION_DESTROY]}' "
+                                             . "LIMIT 1");
+    $tmp_sth->execute($row->{physname});
+    my ($action_id) = $tmp_sth->fetchrow_array();
     my $action_id_del = &LastDeleteTime($row->{physname}, $row->{timestamp});
 
     if (! -e $path) {
