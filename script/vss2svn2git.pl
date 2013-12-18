@@ -2806,12 +2806,13 @@ sub UpdateGitRepository {
                                 # by something.
 
                                 if (! -f  $link_file) {
-                                    my ($action_id) = $gCfg{dbh}->selectrow_array("SELECT action_id "
-                                                                                  . "FROM PhysicalAction "
-                                                                                  . "WHERE physname = ? "
-                                                                                  . "AND actiontype = '@{[ACTION_DESTROY]}' "
-                                                                                  . "LIMIT 1",
-                                                                                  undef, $row->{physname});
+                                    my $tmp_sth = $gCfg{dbh}->prepare_cached("SELECT action_id "
+                                                                             . "FROM PhysicalAction "
+                                                                             . "WHERE physname = ? "
+                                                                             . "AND actiontype = '@{[ACTION_DESTROY]}' "
+                                                                             . "LIMIT 1");
+                                    $tmp_sth->execute($row->{physname});
+                                    my ($action_id) = $tmp_sth->fetchrow_array();
                                     if (!copy((($action_id) ? $gCfg{destroyedFile} : $gCfg{indeterminateFile}),
                                               $link_file)) {  # touch the file
                                         warn "$warn_msg path `$link_file' copy $!";
@@ -3233,20 +3234,20 @@ sub DeferLabel {
     my $pa_params_sql = join q{,}, @pa_ary;
 
     # Copy it to the label table and remove it from the schedule
-    my $sth = $gCfg{dbh}->prepare("INSERT INTO PhysicalActionLabel "
-                                  . "SELECT NULL AS schedule_id, action_id, $pa_params_sql "
-                                  . "FROM PhysicalActionSchedule "
-                                  . "WHERE schedule_id = ?");
+    my $sth = $gCfg{dbh}->prepare_cached("INSERT INTO PhysicalActionLabel "
+                                         . "SELECT NULL AS schedule_id, action_id, $pa_params_sql "
+                                         . "FROM PhysicalActionSchedule "
+                                         . "WHERE schedule_id = ?");
     $sth->execute($row->{schedule_id});
     my $sid = $gCfg{dbh}->last_insert_id("","","","");
-    $sth = $gCfg{dbh}->prepare('DELETE FROM PhysicalActionSchedule WHERE schedule_id = ?');
+    $sth = $gCfg{dbh}->prepare_cached('DELETE FROM PhysicalActionSchedule WHERE schedule_id = ?');
     $sth->execute($row->{schedule_id});
 
     # bookmark HEAD and associate it with the label
     my $head_id = $repo->logrun('rev-parse' => 'HEAD');
     my $giti = nfreeze \%git_image;
-    $sth = $gCfg{dbh}->prepare('INSERT INTO LabelBookmark (label_id, schedule_id, head_id, git_image) '
-                               .'VALUES (NULL, ?, ?, ?)');
+    $sth = $gCfg{dbh}->prepare_cached('INSERT INTO LabelBookmark (label_id, schedule_id, head_id, git_image) '
+                                      .'VALUES (NULL, ?, ?, ?)');
     $sth->execute($sid, $head_id, $giti);
 }
 
