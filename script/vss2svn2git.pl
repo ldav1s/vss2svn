@@ -862,7 +862,24 @@ sub GitReadImage {
         $repo->logrun('reset' => '--hard', $head_id);
         $gCfg{resume} = 0;
     } else {
-        $last_time = $gCfg{mintime};
+        my $username;
+        ($username, $last_time) = $gCfg{dbh}->selectrow_array('SELECT author, timestamp '
+                                                              . 'FROM PhysicalAction '
+                                                              . 'WHERE timestamp = '
+                                                              . '(SELECT MIN(timestamp) FROM PhysicalAction)');
+        my $map = $author_map->{$username};
+
+        # Insert an empty commit
+        $repo->logrun( commit => '--allow-empty', '--no-edit', '-m', 'Initial commit',
+                       {
+                           env => {
+                               GIT_AUTHOR_NAME => $map->{name},
+                               GIT_AUTHOR_EMAIL => $map->{email},
+                               GIT_AUTHOR_DATE => POSIX::strftime(ISO8601_FMT, localtime($last_time)),
+                               GIT_COMMITTER_DATE => POSIX::strftime(ISO8601_FMT, localtime($last_time)),
+                           }
+                       });
+
         $head_id = $repo->logrun('rev-parse' => 'HEAD');
         $next_update = 0;
 
