@@ -1394,21 +1394,28 @@ EOSQL
 sub CheckForDestroy {
     my($exportdir, $physname, $version, $destroyonly, $is_destroyed) = @_;
     my($row, $physpath, $rowd);
+    my $tmp_sth;
 
     $$is_destroyed = 0;
 
     # physical file doesn't exist; it must have been destroyed earlier
     # search and see if it was DESTROYed first
-    ($row) = $gCfg{dbh}->selectrow_array("SELECT action_id FROM PhysicalAction "
-                                         . "WHERE physname = ? AND "
-                                         . "actiontype = '@{[ACTION_DESTROY]}'",
-                                         undef, $physname);
+    $tmp_sth = $gCfg{dbh}->prepare_cached("SELECT action_id FROM PhysicalAction "
+                                          . "WHERE physname = ? AND "
+                                          . "actiontype = '@{[ACTION_DESTROY]}'",
+                                          { dbi_dummy => __FILE__.__LINE__ });
+    $tmp_sth->execute($physname);
+    ($row) = $tmp_sth->fetchrow_array();
+    $tmp_sth->finish();
 
     if (!$destroyonly) {
-        ($rowd) = $gCfg{dbh}->selectrow_array("SELECT action_id FROM PhysicalAction "
+        $tmp_sth = $gCfg{dbh}->prepare_cached("SELECT action_id FROM PhysicalAction "
                                               . "WHERE physname = ? AND "
                                               . "actiontype = '@{[ACTION_DELETE]}'",
-                                              undef, $physname);
+                                              { dbi_dummy => __FILE__.__LINE__ });
+        $tmp_sth->execute($physname);
+        ($rowd) = $tmp_sth->fetchrow_array();
+        $tmp_sth->finish();
     }
 
     my $ftc = $row // $rowd;
@@ -1435,6 +1442,7 @@ sub CheckForDestroy {
 sub ExportVssPhysFile {
     my($physname, $version, $is_destroyed) = @_;
     my($row, $physpath);
+    my $tmp_sth;
 
     $physname =~ m/^(..)/;
     $version = $version // 1;
@@ -1442,7 +1450,11 @@ sub ExportVssPhysFile {
     my $exportdir = File::Spec->catdir($gCfg{vssdata}, $1);
 
     make_path($exportdir) if ! -e $exportdir;
-    ($row) = $gCfg{dbh}->selectrow_array("SELECT datapath FROM Physical WHERE physname = ?", undef, $physname);
+    $tmp_sth = $gCfg{dbh}->prepare_cached('SELECT datapath FROM Physical WHERE physname = ?',
+                                          { dbi_dummy => __FILE__.__LINE__ });
+    $tmp_sth->execute($physname);
+    ($row) = $tmp_sth->fetchrow_array();
+    $tmp_sth->finish();
 
     $physpath = $row // &CheckForDestroy($exportdir, $physname, $version, 1, $is_destroyed);
 
@@ -2303,9 +2315,11 @@ sub SchedulePhysicalActions {
     # fixed here, if possible.
 
     # PhysicalActionSchedule should be empty at this point
-    my $tmp_sth = $gCfg{dbh}->prepare_cached('SELECT COUNT(*) FROM PhysicalActionChangeset');
+    my $tmp_sth = $gCfg{dbh}->prepare_cached('SELECT COUNT(*) FROM PhysicalActionChangeset',
+                                             { dbi_dummy => __FILE__.__LINE__ });
     $tmp_sth->execute();
     my ($changeset_count) = $tmp_sth->fetchrow_array();
+    $tmp_sth->finish();
     my $sth = $gCfg{dbh}->prepare_cached('INSERT INTO PhysicalActionSchedule '
                                          . 'SELECT NULL AS schedule_id, * '
                                          . 'FROM PhysicalAction '
@@ -2315,23 +2329,30 @@ sub SchedulePhysicalActions {
                                          . '  (SELECT action_id FROM PhysicalActionSchedule '
                                          . '   UNION ALL SELECT action_id FROM PhysicalActionRetired) '
                                          . 'ORDER BY timestamp ASC, priority ASC, '
-                                         . 'vss_phys_to_num(physname) ASC, parentdata ASC');
+                                         . 'vss_phys_to_num(physname) ASC, parentdata ASC',
+                                         { dbi_dummy => __FILE__.__LINE__ });
     if (defined $changeset_count && $changeset_count > 0) {
         # We have unused data from the last scheduling pass, let's use it.
         $tmp_sth = $gCfg{dbh}->prepare_cached('INSERT INTO PhysicalActionSchedule '
-                                              . 'SELECT * FROM PhysicalActionChangeset');
-        my $tmp2_sth = $gCfg{dbh}->prepare_cached('DELETE FROM PhysicalActionChangeset');
+                                              . 'SELECT * FROM PhysicalActionChangeset',
+                                              { dbi_dummy => __FILE__.__LINE__ });
 
+        my $tmp2_sth = $gCfg{dbh}->prepare_cached('DELETE FROM PhysicalActionChangeset',
+                                                  { dbi_dummy => __FILE__.__LINE__ });
         $tmp_sth->execute();
         $tmp2_sth->execute();
+        $tmp_sth->finish();
+        $tmp2_sth->finish();
 
         # need to reset time, since there may be two commits in the same timestamp
         $tmp_sth = $gCfg{dbh}->prepare_cached('SELECT timestamp '
                                               . 'FROM PhysicalActionSchedule '
                                               . 'WHERE schedule_id = '
-                                              . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
+                                              . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)',
+                                              { dbi_dummy => __FILE__.__LINE__ });
         $tmp_sth->execute();
         ($timestamp) = $tmp_sth->fetchrow_array();
+        $tmp_sth->finish();
     }
 
     # This slides the window down.
@@ -2343,6 +2364,7 @@ sub SchedulePhysicalActions {
     }
 
     &GetOneChangeset($timestamp);
+    $sth->finish();
 }
 
 ###############################################################################
@@ -2358,28 +2380,28 @@ sub CheckAffinity {
     # that they should be reordered
     my $ath = $gCfg{dbh}->prepare_cached('SELECT DISTINCT timestamp '
                                          . 'FROM PhysicalActionSchedule '
-                                         . 'ORDER BY timestamp');
+                                         . 'ORDER BY timestamp',
+                                         { dbi_dummy => __FILE__.__LINE__ });
     $ath->execute();
     my $timestamps = $ath->fetchall_arrayref();
     foreach my $t (@$timestamps) {
         my $timestamp = $t->[0];
         my $rowcount;
         my $tmp_sth = $gCfg{dbh}->prepare_cached('SELECT COUNT(*) FROM PhysicalActionSchedule '
-                                                 . ' WHERE timestamp = ? ORDER BY schedule_id');
+                                                 . ' WHERE timestamp = ? ORDER BY schedule_id',
+                                                 { dbi_dummy => __FILE__.__LINE__ });
         $tmp_sth->execute($timestamp);
         ($rowcount) = $tmp_sth->fetchrow_array();
+        $tmp_sth->finish();
 
         if ($rowcount > 1) {
-            $sth = $gCfg{dbh}->prepare_cached('CREATE TEMPORARY TABLE tmp_affinity AS '
-                                              . ' SELECT 0 AS affinity, * FROM PhysicalActionSchedule '
-                                              . ' WHERE timestamp = ? ORDER BY schedule_id');
-            my $d_sth = $gCfg{dbh}->prepare_cached('DROP TABLE tmp_affinity');
-
-            $sth->execute($timestamp);
+            $gCfg{dbh}->do('CREATE TEMPORARY TABLE tmp_affinity AS '
+                           . ' SELECT 0 AS affinity, * FROM PhysicalActionSchedule '
+                           . ' WHERE timestamp = ? ORDER BY schedule_id', undef, $timestamp);
 
             # grab identifying data
-            $sth = $gCfg{dbh}->prepare_cached('SELECT schedule_id, action_id '
-                                              . 'FROM tmp_affinity ORDER BY schedule_id');
+            $sth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id '
+                                       . 'FROM tmp_affinity ORDER BY schedule_id');
             $sth->execute();
             my $ooo_data = $sth->fetchall_arrayref({});
 
@@ -2395,12 +2417,14 @@ sub CheckAffinity {
                                               . '    WHERE timestamp = '
                                               . '          (SELECT MAX(timestamp) '
                                               . '           FROM PhysicalActionSchedule '
-                                              . '           WHERE timestamp < ?)) LIMIT 1');
+                                              . '           WHERE timestamp < ?)) LIMIT 1',
+                                              { dbi_dummy => __FILE__.__LINE__ });
             $sth->execute($timestamp);
             my $lrow;
             while (defined($lrow = $sth->fetchrow_hashref())) {
                 &UpdateRowAffinity($lrow,-1);
             }
+            $sth->finish();
 
             # check affinity with timestamp not equal to this one
             # of next row. This operation might not be a good idea --
@@ -2412,16 +2436,18 @@ sub CheckAffinity {
                                               . '    WHERE timestamp = '
                                               . '          (SELECT MIN(timestamp) '
                                               . '           FROM PhysicalActionSchedule '
-                                              . '           WHERE timestamp > ?)) LIMIT 1');
+                                              . '           WHERE timestamp > ?)) LIMIT 1',
+                                              { dbi_dummy => __FILE__.__LINE__ });
             $sth->execute($timestamp);
             while (defined($lrow = $sth->fetchrow_hashref())) {
                 &UpdateRowAffinity($lrow,1);
             }
+            $sth->finish();
 
             # sort using affinity first
-            $sth = $gCfg{dbh}->prepare_cached('SELECT schedule_id, action_id '
-                                              . 'FROM tmp_affinity '
-                                              . 'ORDER BY affinity ASC, schedule_id ASC');
+            $sth = $gCfg{dbh}->prepare('SELECT schedule_id, action_id '
+                                       . 'FROM tmp_affinity '
+                                       . 'ORDER BY affinity ASC, schedule_id ASC');
             $sth->execute();
             my $ino_data = $sth->fetchall_arrayref({});
 
@@ -2431,9 +2457,9 @@ sub CheckAffinity {
 
             if (!(@oids ~~ @iids)) {
                 say "affinity changed" if $gCfg{debug};
-                $tmp_sth = $gCfg{dbh}->prepare_cached("UPDATE tmp_affinity SET schedule_id = ? "
-                                                      ."WHERE schedule_id = ? "
-                                                      ."AND action_id = ?");
+                $tmp_sth = $gCfg{dbh}->prepare("UPDATE tmp_affinity SET schedule_id = ? "
+                                               ."WHERE schedule_id = ? "
+                                               ."AND action_id = ?");
 
                 my $i = 0;
                 foreach my $o (@oids) {
@@ -2460,9 +2486,10 @@ sub CheckAffinity {
                 $gCfg{dbh}->do("INSERT INTO PhysicalActionSchedule "
                                . "SELECT $pas_params_sql FROM tmp_affinity");
             }
-            $d_sth->execute();
+            $gCfg{dbh}->do('DROP TABLE tmp_affinity');
         }
     }
+    $ath->finish();
 }
 
 ###############################################################################
@@ -2471,37 +2498,38 @@ sub CheckAffinity {
 sub UpdateRowAffinity {
     my ($lrow, $direction) = @_;
 
-    my $rth = $gCfg{dbh}->prepare_cached('UPDATE tmp_affinity SET affinity = affinity+? WHERE author = ?');
+    my $rth = $gCfg{dbh}->prepare('UPDATE tmp_affinity SET affinity = affinity+? WHERE author = ?');
     $rth->execute($direction, $lrow->{author});
 
     if (defined $lrow->{comment}) {
-        $rth = $gCfg{dbh}->prepare_cached('UPDATE tmp_affinity SET affinity = affinity+? WHERE comment = ?');
+        $rth = $gCfg{dbh}->prepare('UPDATE tmp_affinity SET affinity = affinity+? WHERE comment = ?');
         $rth->execute($direction, $lrow->{comment});
     } else {
-        $rth = $gCfg{dbh}->prepare_cached('UPDATE tmp_affinity SET affinity = affinity+? WHERE comment IS NULL');
+        $rth = $gCfg{dbh}->prepare('UPDATE tmp_affinity SET affinity = affinity+? WHERE comment IS NULL');
         $rth->execute($direction);
     }
 
     if ($lrow->{actiontype} eq ACTION_LABEL) {
-        $rth = $gCfg{dbh}->prepare_cached('SELECT label FROM PhysLabel WHERE action_id = ?');
+        $rth = $gCfg{dbh}->prepare('SELECT label FROM PhysLabel WHERE action_id = ?');
         $rth->execute($lrow->{action_id});
         ($lrow->{label}) = $rth->fetchrow_array();
 
         if (defined $lrow->{label}) {
             my $d2 = $direction*2; # more heavily weight these
-            $rth = $gCfg{dbh}->prepare_cached("UPDATE tmp_affinity SET affinity = affinity+? "
-                                              . "WHERE actiontype = '@{[ACTION_LABEL]}' "
-                                              . "AND action_id IN (SELECT action_id FROM PhysLabel WHERE label = ?)");
+            $rth = $gCfg{dbh}->prepare("UPDATE tmp_affinity SET affinity = affinity+? "
+                                       . "WHERE actiontype = '@{[ACTION_LABEL]}' "
+                                       . "AND action_id IN (SELECT action_id FROM PhysLabel WHERE label = ?)");
             $rth->execute($d2, $lrow->{label});
         }
     }
  }
 
 sub GetOneChangesetLog {
-    my($msg, $schedule_id, $dbgsql) = @_;
+    my($msg, $schedule_id, $dbg_sth) = @_;
     my $desc = $schedule_id // 'undef';
 
-    my ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
+    $dbg_sth->execute();
+    my ($dbgcnt) = $dbg_sth->fetchrow_array();
     say "$msg $desc rows: $dbgcnt";
 }
 
@@ -2512,13 +2540,16 @@ sub GetOneChangeset {
     my($timestamp) = @_;
     my $isth;
     my $dsth;
-    my $dbgsql = 'SELECT COUNT(*) FROM PhysicalActionSchedule';
     my $dbgcnt;
+    my $dbg_sth;
 
     $isth = $gCfg{dbh}->prepare_cached('INSERT INTO PhysicalActionChangeset '
-                                . 'SELECT * FROM PhysicalActionSchedule WHERE schedule_id >= ?');
-
-    $dsth = $gCfg{dbh}->prepare_cached('DELETE FROM PhysicalActionSchedule WHERE schedule_id >= ?');
+                                       . 'SELECT * FROM PhysicalActionSchedule WHERE schedule_id >= ?',
+                                       { dbi_dummy => __FILE__.__LINE__ },
+                                       1);
+    $dsth = $gCfg{dbh}->prepare_cached('DELETE FROM PhysicalActionSchedule WHERE schedule_id >= ?',
+                                       { dbi_dummy => __FILE__.__LINE__ },
+                                       1);
 
     # Now that we have a reasonable ordering of events, look for
     # exactly one changeset starting at this timestamp
@@ -2532,7 +2563,10 @@ sub GetOneChangeset {
     # * same file touched more than once
 
     if ($gCfg{debug}) {
-        ($dbgcnt) = $gCfg{dbh}->selectrow_array($dbgsql);
+        $dbg_sth = $gCfg{dbh}->prepare_cached('SELECT COUNT(*) FROM PhysicalActionSchedule',
+                                              { dbi_dummy => __FILE__.__LINE__ });
+        $dbg_sth->execute();
+        ($dbgcnt) = $dbg_sth->fetchrow_array();
         say "scheduling timestamp $timestamp with $dbgcnt rows";
     }
 
@@ -2548,15 +2582,18 @@ sub GetOneChangeset {
                                              . '(SELECT author '
                                              . ' FROM PhysicalActionSchedule '
                                              . ' WHERE timestamp = ? ORDER BY schedule_id LIMIT 1) '
-                                             . 'ORDER BY schedule_id LIMIT 1');
+                                             . 'ORDER BY schedule_id LIMIT 1',
+                                             { dbi_dummy => __FILE__.__LINE__ });
+
     $tmp_sth->execute($timestamp);
     ($schedule_id) = $tmp_sth->fetchrow_array();
     if ($schedule_id) {
         $isth->execute($schedule_id);
         $dsth->execute($schedule_id);
     }
+    $tmp_sth->finish();
 
-    &GetOneChangesetLog("scheduling author ", $schedule_id, $dbgsql) if $gCfg{debug};
+    &GetOneChangesetLog("scheduling author ", $schedule_id, $dbg_sth) if $gCfg{debug};
 
     # dump all entries incuding and after the first mismatch of comments
     # N.B. comments may be NULL
@@ -2569,15 +2606,18 @@ sub GetOneChangeset {
                                           . 'WHERE (A.comment IS NULL AND B.comment IS NOT NULL '
                                           . '       OR A.comment IS NOT NULL AND B.comment IS NULL '
                                           . '       OR A.comment IS NOT NULL AND B.comment IS NOT NULL '
-                                          . '          AND A.comment != B.comment)');
+                                          . '          AND A.comment != B.comment)',
+                                          { dbi_dummy => __FILE__.__LINE__ });
+
     $tmp_sth->execute();
     ($schedule_id) = $tmp_sth->fetchrow_array();
     if ($schedule_id) {
         $isth->execute($schedule_id);
         $dsth->execute($schedule_id);
     }
+    $tmp_sth->finish();
 
-    &GetOneChangesetLog("scheduling comment ", $schedule_id, $dbgsql) if $gCfg{debug};
+    &GetOneChangesetLog("scheduling comment ", $schedule_id, $dbg_sth) if $gCfg{debug};
 
     # Label filter part 1
     # When the first item on the schedule is (or is not) a LABEL, remove the first
@@ -2590,7 +2630,8 @@ sub GetOneChangeset {
                                           . "WHERE (A.actiontype = '@{[ACTION_LABEL]}' "
                                           . "       AND B.actiontype != '@{[ACTION_LABEL]}') "
                                           . "   OR (A.actiontype != '@{[ACTION_LABEL]}' "
-                                          . "       AND B.actiontype = '@{[ACTION_LABEL]}')");
+                                          . "       AND B.actiontype = '@{[ACTION_LABEL]}')",
+                                          { dbi_dummy => __FILE__.__LINE__ });
 
     $tmp_sth->execute();
     ($schedule_id) = $tmp_sth->fetchrow_array();
@@ -2598,8 +2639,9 @@ sub GetOneChangeset {
         $isth->execute($schedule_id);
         $dsth->execute($schedule_id);
     }
+    $tmp_sth->finish();
 
-    &GetOneChangesetLog("scheduling label pre ", $schedule_id, $dbgsql) if $gCfg{debug};
+    &GetOneChangesetLog("scheduling label pre ", $schedule_id, $dbg_sth) if $gCfg{debug};
 
     # dump all entries incuding and after the first mismatch of labels
     # Again, it's at least two labels. Even though there are no changes,
@@ -2615,15 +2657,18 @@ sub GetOneChangeset {
                                           . "CROSS JOIN (SELECT X.schedule_id AS schedule_id, X.actiontype AS actiontype, Y.label AS label "
                                           . "            FROM PhysicalActionSchedule AS X, PhysLabel AS Y "
                                           . "            WHERE X.action_id = Y.action_id) AS B "
-                                          . "WHERE A.label != B.label");
+                                          . "WHERE A.label != B.label",
+                                          { dbi_dummy => __FILE__.__LINE__ });
+
     $tmp_sth->execute();
     ($schedule_id) = $tmp_sth->fetchrow_array();
     if ($schedule_id) {
         $isth->execute($schedule_id);
         $dsth->execute($schedule_id);
     }
+    $tmp_sth->finish();
 
-    &GetOneChangesetLog("scheduling label ", $schedule_id, $dbgsql) if $gCfg{debug};
+    &GetOneChangesetLog("scheduling label ", $schedule_id, $dbg_sth) if $gCfg{debug};
 
     # * most directory actions
     # If the topmost scheduled action is one of the actions in the set
@@ -2639,15 +2684,18 @@ sub GetOneChangeset {
                                           . "AND Y.itemtype = @{[VSS_PROJECT]} AND X.actiontype IN "
                                           . "('@{[ACTION_RESTOREDPROJECT]}', '@{[ACTION_RENAME]}', "
                                           . "'@{[ACTION_DELETE]}', '@{[ACTION_DESTROY]}', '@{[ACTION_RECOVER]}', "
-                                          . "'@{[ACTION_RESTORE]}', '@{[ACTION_MOVE_TO]}', '@{[ACTION_MOVE_FROM]}')");
+                                          . "'@{[ACTION_RESTORE]}', '@{[ACTION_MOVE_TO]}', '@{[ACTION_MOVE_FROM]}')",
+                                          { dbi_dummy => __FILE__.__LINE__ });
+
     $tmp_sth->execute();
     ($schedule_id) = $tmp_sth->fetchrow_array();
     if ($schedule_id) {
         $isth->execute($schedule_id);
         $dsth->execute($schedule_id);
     }
+    $tmp_sth->finish();
 
-    &GetOneChangesetLog("scheduling dir actions ", $schedule_id, $dbgsql) if $gCfg{debug};
+    &GetOneChangesetLog("scheduling dir actions ", $schedule_id, $dbg_sth) if $gCfg{debug};
 
     # * same file touched more than once
     # SHARE and BRANCH are pretty benign, other actions potentially
@@ -2675,15 +2723,21 @@ sub GetOneChangeset {
                                           . "      AND X.actiontype IN ('@{[ACTION_COMMIT]}', '@{[ACTION_LABEL]}')"
                                           . "      ORDER BY schedule_id) AS B "
                                           . "WHERE A.physname = B.physname AND A.schedule_id > B.schedule_id "
-                                          . "AND A.actiontype NOT IN ('@{[ACTION_SHARE]}', '@{[ACTION_BRANCH]}')");
+                                          . "AND A.actiontype NOT IN ('@{[ACTION_SHARE]}', '@{[ACTION_BRANCH]}')",
+                                          { dbi_dummy => __FILE__.__LINE__ });
     $tmp_sth->execute();
     ($schedule_id) = $tmp_sth->fetchrow_array();
     if ($schedule_id) {
         $isth->execute($schedule_id);
         $dsth->execute($schedule_id);
     }
+    $tmp_sth->finish();
 
-    &GetOneChangesetLog("scheduling same file touched ", $schedule_id, $dbgsql) if $gCfg{debug};
+    &GetOneChangesetLog("scheduling same file touched ", $schedule_id, $dbg_sth) if $gCfg{debug};
+
+    if ($gCfg{debug}) {
+        $dbg_sth->finish();
+    }
 }
 
 # update the image name mapping when files/directories are moved
@@ -2808,9 +2862,12 @@ sub UpdateGitRepository {
                                                                              . "FROM PhysicalAction "
                                                                              . "WHERE physname = ? "
                                                                              . "AND actiontype = '@{[ACTION_DESTROY]}' "
-                                                                             . "LIMIT 1");
+                                                                             . "LIMIT 1",
+                                                                             { dbi_dummy => __FILE__.__LINE__ });
+
                                     $tmp_sth->execute($row->{physname});
                                     my ($action_id) = $tmp_sth->fetchrow_array();
+                                    $tmp_sth->finish();
                                     if (!copy((($action_id) ? $gCfg{destroyedFile} : $gCfg{indeterminateFile}),
                                               $link_file)) {  # touch the file
                                         warn "$warn_msg path `$link_file' copy $!";
@@ -3235,18 +3292,24 @@ sub DeferLabel {
     my $sth = $gCfg{dbh}->prepare_cached("INSERT INTO PhysicalActionLabel "
                                          . "SELECT NULL AS schedule_id, action_id, $pa_params_sql "
                                          . "FROM PhysicalActionSchedule "
-                                         . "WHERE schedule_id = ?");
+                                         . "WHERE schedule_id = ?",
+                                         { dbi_dummy => __FILE__.__LINE__ });
     $sth->execute($row->{schedule_id});
     my $sid = $gCfg{dbh}->last_insert_id("","","","");
-    $sth = $gCfg{dbh}->prepare_cached('DELETE FROM PhysicalActionSchedule WHERE schedule_id = ?');
+    $sth->finish();
+    $sth = $gCfg{dbh}->prepare_cached('DELETE FROM PhysicalActionSchedule WHERE schedule_id = ?',
+                                      { dbi_dummy => __FILE__.__LINE__ });
     $sth->execute($row->{schedule_id});
+    $sth->finish();
 
     # bookmark HEAD and associate it with the label
     my $head_id = $repo->logrun('rev-parse' => 'HEAD');
     my $giti = nfreeze \%git_image;
     $sth = $gCfg{dbh}->prepare_cached('INSERT INTO LabelBookmark (label_id, schedule_id, head_id, git_image) '
-                                      .'VALUES (NULL, ?, ?, ?)');
+                                      .'VALUES (NULL, ?, ?, ?)',
+                                      { dbi_dummy => __FILE__.__LINE__ });
     $sth->execute($sid, $head_id, $giti);
+    $sth->finish();
 }
 
 # create or checkout a branch for a label and add files to it from master
@@ -3312,9 +3375,11 @@ sub LastDeleteTime {
                                               . "(SELECT MAX(timestamp) "
                                               . " FROM PhysicalAction "
                                               . " WHERE physname = ? AND actiontype = '@{[ACTION_DELETE]}' "
-                                              . " AND timestamp < ?)");
+                                             . " AND timestamp < ?)",
+                                             { dbi_dummy => __FILE__.__LINE__ });
     $tmp_sth->execute($physname, $physname, $timestamp);
     my ($action_id_del) = $tmp_sth->fetchrow_array();
+    $tmp_sth->finish();
     return $action_id_del;
 }
 
@@ -3326,9 +3391,11 @@ sub GitRecover {
     my $tmp_sth = $gCfg{dbh}->prepare_cached("SELECT action_id "
                                              . "FROM PhysicalAction "
                                              . "WHERE physname = ? AND actiontype = '@{[ACTION_DESTROY]}' "
-                                             . "LIMIT 1");
+                                             . "LIMIT 1",
+                                             { dbi_dummy => __FILE__.__LINE__ });
     $tmp_sth->execute($row->{physname});
     my ($action_id) = $tmp_sth->fetchrow_array();
+    $tmp_sth->finish();
     my $action_id_del = &LastDeleteTime($row->{physname}, $row->{timestamp});
 
     if (! -e $path) {
