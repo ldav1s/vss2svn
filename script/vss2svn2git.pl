@@ -966,7 +966,7 @@ sub GitReadImage {
         if ($@) {
             warn "Transaction aborted because $@";
             eval { $gCfg{dbh}->rollback };
-            die "Failed to load name lookup table";
+            die "Failed to commit changeset";
         } else {
             $gCfg{dbh}->commit;
         }
