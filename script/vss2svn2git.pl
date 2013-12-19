@@ -2303,6 +2303,30 @@ sub DestroyedHash {
     $gCfg{destroyedHash} = $repo->logrun('hash-object' => '--',  abs_path($gCfg{destroyedFile}));
 }
 
+sub InsertPhysicalActionChangeset {
+    my $tmp_sth = $gCfg{dbh}->prepare_cached('INSERT INTO PhysicalActionSchedule '
+                                             . 'SELECT * FROM PhysicalActionChangeset');
+    my $tmp2_sth = $gCfg{dbh}->prepare_cached('DELETE FROM PhysicalActionChangeset');
+
+    $tmp_sth->execute();
+    $tmp2_sth->execute();
+    $tmp_sth->finish();
+    $tmp2_sth->finish();
+}
+
+sub ResetTimestampFromSchedule {
+    my $tmp_sth = $gCfg{dbh}->prepare_cached('SELECT timestamp '
+                                             . 'FROM PhysicalActionSchedule '
+                                             . 'WHERE schedule_id = '
+                                             . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
+
+    $tmp_sth->execute();
+    my ($timestamp) = $tmp_sth->fetchrow_array();
+    $tmp_sth->finish();
+
+    return $timestamp;
+}
+
 ###############################################################################
 #  SchedulePhysicalActions
 ###############################################################################
@@ -2333,26 +2357,11 @@ sub SchedulePhysicalActions {
                                          { dbi_dummy => __FILE__.__LINE__ });
     if (defined $changeset_count && $changeset_count > 0) {
         # We have unused data from the last scheduling pass, let's use it.
-        $tmp_sth = $gCfg{dbh}->prepare_cached('INSERT INTO PhysicalActionSchedule '
-                                              . 'SELECT * FROM PhysicalActionChangeset',
-                                              { dbi_dummy => __FILE__.__LINE__ });
-
-        my $tmp2_sth = $gCfg{dbh}->prepare_cached('DELETE FROM PhysicalActionChangeset',
-                                                  { dbi_dummy => __FILE__.__LINE__ });
-        $tmp_sth->execute();
-        $tmp2_sth->execute();
-        $tmp_sth->finish();
-        $tmp2_sth->finish();
+        &InsertPhysicalActionChangeset();
 
         # need to reset time, since there may be two commits in the same timestamp
-        $tmp_sth = $gCfg{dbh}->prepare_cached('SELECT timestamp '
-                                              . 'FROM PhysicalActionSchedule '
-                                              . 'WHERE schedule_id = '
-                                              . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)',
-                                              { dbi_dummy => __FILE__.__LINE__ });
-        $tmp_sth->execute();
-        ($timestamp) = $tmp_sth->fetchrow_array();
-        $tmp_sth->finish();
+        $timestamp = &ResetTimestampFromSchedule();
+
     }
 
     # This slides the window down.
