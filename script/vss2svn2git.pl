@@ -1052,11 +1052,6 @@ EOT
 ###############################################################################
 sub ReplayLabels {
     # Read the labels, checking out the particular bookmark for a label.
-
-    my($sth, $tth, $uth, $rows);
-    my ($last_time);
-
-
     my $repo = Git::Repository->new(work_tree => "$gCfg{repo}");
     $repo->setlog($gCfg{debug});
 
@@ -1077,136 +1072,139 @@ sub ReplayLabels {
     $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
                    . 'SELECT * FROM PhysicalActionLabel ORDER BY schedule_id');
 
-    ($last_time) = $gCfg{dbh}->selectrow_array('SELECT timestamp '
-                                               . 'FROM PhysicalActionSchedule '
-                                               . 'WHERE schedule_id = '
-                                               . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
+    my $last_time = &ResetTimestampFromSchedule();
 
-    $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
+    my $sth = $gCfg{dbh}->prepare('SELECT * FROM PhysicalActionSchedule ORDER BY schedule_id');
 
-    $tth = $gCfg{dbh}->prepare("SELECT MIN(timestamp) "
-                               . "FROM PhysicalAction "
-                               . "WHERE timestamp > ? "
-                               . "AND actiontype = '@{[ACTION_LABEL]}'");
-
-    $uth = $gCfg{dbh}->prepare('SELECT head_id, git_image FROM LabelBookmark WHERE schedule_id = ?');
+    my $tth = $gCfg{dbh}->prepare("SELECT MIN(timestamp) "
+                                  . "FROM PhysicalAction "
+                                  . "WHERE timestamp > ? "
+                                  . "AND actiontype = '@{[ACTION_LABEL]}'");
+    my $uth = $gCfg{dbh}->prepare('SELECT head_id, git_image FROM LabelBookmark WHERE schedule_id = ?');
     my $it_sth = $gCfg{dbh}->prepare('SELECT itemtype FROM PhysItemtype WHERE physname = ?');
     my $l_sth = $gCfg{dbh}->prepare('SELECT label FROM PhysLabel WHERE action_id = ?');
+    my $d_sth = $gCfg{dbh}->prepare('DELETE FROM PhysicalActionSchedule');
+    my $r_sth = $gCfg{dbh}->prepare('INSERT INTO PhysicalActionRetired '
+                                    . 'SELECT NULL AS retired_id, '
+                                    . '? AS commit_id, * FROM PhysicalActionSchedule '
+                                    . 'ORDER BY schedule_id');
 
     my $first_label = 0;
+    my $dump_cnt;
     while (defined $last_time && $last_time < $gCfg{maxtime}) {
         my ($username, $comment);
 
         say "timestamp label: $last_time" if $gCfg{verbose};
 
-        if ($first_label != 0) {
-            # These have been scheduled already, no need to go through
-            # that code again, just get a changeset
-            $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
-                           . 'SELECT * FROM PhysicalActionChangeset');
-            $gCfg{dbh}->do('DELETE FROM PhysicalActionChangeset');
-        }
+        $gCfg{dbh}->begin_work or die $gCfg{dbh}->errstr;
+        eval {
+            if ($first_label != 0) {
+                # These have been scheduled already, no need to go through
+                # that code again, just get a changeset
+                &InsertPhysicalActionChangeset();
+            }
 
-        ($last_time) = $gCfg{dbh}->selectrow_array('SELECT timestamp '
-                                                   . 'FROM PhysicalActionSchedule '
-                                                   . 'WHERE schedule_id = '
-                                                   . '(SELECT MIN(schedule_id) FROM PhysicalActionSchedule)');
+            $last_time = &ResetTimestampFromSchedule();
 
-        &GetOneChangeset($last_time);
+            &GetOneChangeset($last_time);
 
-        $sth->execute();
-        $rows = $sth->fetchall_arrayref( {} );
+            $sth->execute();
+            my $rows = $sth->fetchall_arrayref( {} );
 
-        undef $username;
+            undef $username;
 
-        # It's not an error to have 0 scheduled rows
+            # It's not an error to have 0 scheduled rows
 
-        my $dump_cnt = 0;
-        foreach my $row (@$rows) {
-            $last_time = $row->{timestamp};
-            $username = $row->{author};
-            $comment = $row->{comment};
+            $dump_cnt = 0;
+            foreach my $row (@$rows) {
+                $last_time = $row->{timestamp};
+                $username = $row->{author};
+                $comment = $row->{comment};
 
-            my ($path, $parentpath);
+                my ($path, $parentpath);
 
-            if ($dump_cnt == 0) {
-                $l_sth->execute($row->{action_id});
-                ($row->{label}) = $l_sth->fetchrow_array();
+                if ($dump_cnt == 0) {
+                    $l_sth->execute($row->{action_id});
+                    ($row->{label}) = $l_sth->fetchrow_array();
 
-                my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
+                    my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
 
-                if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
-                    # create a new branch for this label
-                    # invalid labels are not recorded in label map
-                    $repo->logrun(checkout => '-q', '--orphan',  $tagname);
-                    if (defined $row->{comment} && $row->{comment} ne '') {
-                        $repo->logrun(config => "branch." . $tagname . ".description",  $row->{comment}); # give it a description
-                    }
-                    $repo->logrun(reset => '--hard'); # unmark all the "new" files from the commit.
-                    if (!invalid_branch_name($row->{label})) {
-                        $label_map->{$row->{label}} = $tagname;
-                        say "Label `$row->{label}' is branch `$tagname'.";
+                    if (!defined $row->{label} || !defined $label_map->{$row->{label}}) {
+                        # create a new branch for this label
+                        # invalid labels are not recorded in label map
+                        $repo->logrun(checkout => '-q', '--orphan',  $tagname);
+                        if (defined $row->{comment} && $row->{comment} ne '') {
+                            $repo->logrun(config => "branch." . $tagname . ".description",  $row->{comment}); # give it a description
+                        }
+                        $repo->logrun(reset => '--hard'); # unmark all the "new" files from the commit.
+                        if (!invalid_branch_name($row->{label})) {
+                            $label_map->{$row->{label}} = $tagname;
+                            say "Label `$row->{label}' is branch `$tagname'.";
+                        } else {
+                            say "undef label is branch `$tagname' at timestamp $row->{timestamp}.";
+                        }
                     } else {
-                        say "undef label is branch `$tagname' at timestamp $row->{timestamp}.";
+                        $repo->logrun(checkout => '-q', $tagname);
                     }
+                }
+
+                ++$dump_cnt;
+
+                $uth->execute($row->{schedule_id});
+
+                my ($head_id, $giti) = $uth->fetchrow_array();
+                $giti = thaw($giti);
+
+                $it_sth->execute($row->{physname});
+                ($row->{itemtype}) = $it_sth->fetchrow_array();
+
+                if (defined $row->{parentphys}) {
+                    say "label parentphys: $row->{parentphys} "
+                        . "physname: $row->{physname} "
+                        . "timestamp: $row->{timestamp}" if $gCfg{debug};
+                    $parentpath = $giti->{$row->{parentphys}};
+                    $path = ($row->{itemtype} == VSS_PROJECT)
+                        ? File::Spec->catdir($parentpath, $row->{itemname})
+                        : File::Spec->catfile($parentpath, $row->{itemname});
+                    # wrap path in array
+                    my @p = ("$path");
+                    $path = \@p;
                 } else {
-                    $repo->logrun(checkout => '-q', $tagname);
+                    # presumably this is a child entry
+                    # pick a path to update
+                    if (defined $row->{physname}
+                        && defined $giti->{$row->{physname}}) {
+                        # no such thing as a unique "path" with shares
+                        $path = $giti->{$row->{physname}};
+                    }
                 }
+
+                &GitLabel($row, $repo, $head_id, $path);
             }
 
-            ++$dump_cnt;
-
-            $uth->execute($row->{schedule_id});
-
-            my ($head_id, $giti) = $uth->fetchrow_array();
-            $giti = thaw($giti);
-
-            $it_sth->execute($row->{physname});
-            ($row->{itemtype}) = $it_sth->fetchrow_array();
-
-            if (defined $row->{parentphys}) {
-                say "label parentphys: $row->{parentphys} "
-                    . "physname: $row->{physname} "
-                    . "timestamp: $row->{timestamp}" if $gCfg{debug};
-                $parentpath = $giti->{$row->{parentphys}};
-                $path = ($row->{itemtype} == VSS_PROJECT)
-                    ? File::Spec->catdir($parentpath, $row->{itemname})
-                    : File::Spec->catfile($parentpath, $row->{itemname});
-                # wrap path in array
-                my @p = ("$path");
-                $path = \@p;
-            } else {
-                # presumably this is a child entry
-                # pick a path to update
-                if (defined $row->{physname}
-                    && defined $giti->{$row->{physname}}) {
-                    # no such thing as a unique "path" with shares
-                    $path = $giti->{$row->{physname}};
-                }
+            if (defined $username) {
+                &GitCommit($repo, $comment, $username, $last_time);
+                ++$gCfg{commit_id};
             }
 
-            &GitLabel($row, $repo, $head_id, $path);
+            # get the next changeset
+            if ($last_time < $gCfg{maxtime}) {
+                $tth->execute($last_time);
+                $last_time = $tth->fetchall_arrayref()->[0][0];
+            }
+
+            # Retire old data
+            $r_sth->execute($gCfg{commit_id});
+            $d_sth->execute();
+            ++$first_label;
+        };
+        if ($@) {
+            warn "Transaction aborted because $@";
+            eval { $gCfg{dbh}->rollback };
+            die "Failed to commit label";
+        } else {
+            $gCfg{dbh}->commit;
         }
-
-        if (defined $username) {
-            &GitCommit($repo, $comment, $username, $last_time);
-            ++$gCfg{commit_id};
-        }
-
-        # get the next changeset
-        if ($last_time < $gCfg{maxtime}) {
-            $tth->execute($last_time);
-            $last_time = $tth->fetchall_arrayref()->[0][0];
-        }
-
-        # Retire old data
-        $gCfg{dbh}->do("INSERT INTO PhysicalActionRetired "
-                       ."SELECT NULL AS retired_id, "
-                       . "$gCfg{commit_id} AS commit_id, * FROM PhysicalActionSchedule "
-                       . "ORDER BY schedule_id");
-        $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule');
-
-        ++$first_label;
 
         if (defined $progress) {
             $prg_count += $dump_cnt;
@@ -3324,9 +3322,12 @@ sub DeferLabel {
 # create or checkout a branch for a label and add files to it from master
 sub GitLabel {
     my($row, $repo, $head_id, $paths) = @_;
-    
-    ($row->{label}) = $gCfg{dbh}->selectrow_array('SELECT label FROM PhysLabel WHERE action_id = ?',
-                                                  undef, $row->{action_id});
+    my $sth = $gCfg{dbh}->prepare_cached('SELECT label FROM PhysLabel WHERE action_id = ?',
+                                         { dbi_dummy => __FILE__.__LINE__ });
+    $sth->execute($row->{action_id});
+    ($row->{label}) = $sth->fetchrow_array();
+    $sth->finish();
+
     my $tagname = get_valid_ref_name($row->{label}, $row->{timestamp});
 
     # copy each path into the label
