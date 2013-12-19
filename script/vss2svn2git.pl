@@ -1580,7 +1580,7 @@ EOTXT
         $elapsed = sprintf(join(" ", @fmt), @fmt_data);
     }
 
-    my($actions, $discarded, $revisions, $mintime, $maxtime) = &GetStats();
+    my($actions, $revisions, $mintime, $maxtime) = &GetStats();
 
     print <<"EOTXT";
 Started at              : $starttime
@@ -1588,7 +1588,6 @@ Ended at                : $endtime
 Elapsed time            : $elapsed
 
 VSS Actions read        : $actions
-VSS Actions discarded   : $discarded
 git commits converted   : $revisions
 Date range (YYYY-MM-DD) : $mintime to $maxtime
 
@@ -1600,10 +1599,9 @@ EOTXT
 #  GetStats
 ###############################################################################
 sub GetStats {
-    my($actions, $discarded, $mintime, $maxtime);
+    my($actions, $mintime, $maxtime);
 
     ($actions) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalActionRetired');
-    ($discarded) = $gCfg{dbh}->selectrow_array('SELECT COUNT(*) FROM PhysicalActionDiscarded');
 
     $mintime = $gCfg{mintime};
     $maxtime = $gCfg{maxtime};
@@ -1612,7 +1610,7 @@ sub GetStats {
         $_ = POSIX::strftime(MINMAX_TIME_FMT, localtime($_));
     }
 
-    return($actions, $discarded, $gCfg{commit_id}-1, $mintime, $maxtime);
+    return($actions, $gCfg{commit_id}-1, $mintime, $maxtime);
 
 }  #  End GetStats
 
@@ -1929,22 +1927,6 @@ EOSQL
 CREATE TABLE
     PhysicalActionRetired (
         retired_id INTEGER PRIMARY KEY,
-        commit_id INTEGER NOT NULL,
-        schedule_id INTEGER NOT NULL,
-        action_id   INTEGER NOT NULL,
-        $pa_sql
-    )
-EOSQL
-
-    $gCfg{dbh}->do($sql);
-
-
-    # The PhysicalActionDiscarded table archives PhysicalActionSchedule items
-    # that have not been run, are not planned to be run.
-    $sql = <<"EOSQL";
-CREATE TABLE
-    PhysicalActionDiscarded (
-        discarded_id INTEGER PRIMARY KEY,
         commit_id INTEGER NOT NULL,
         schedule_id INTEGER NOT NULL,
         action_id   INTEGER NOT NULL,
@@ -2331,8 +2313,7 @@ sub SchedulePhysicalActions {
                                          . '  AND timestamp < ? '
                                          . '  AND action_id NOT IN '
                                          . '  (SELECT action_id FROM PhysicalActionSchedule '
-                                         . '   UNION ALL SELECT action_id FROM PhysicalActionRetired '
-                                         . '   UNION ALL SELECT action_id FROM PhysicalActionDiscarded) '
+                                         . '   UNION ALL SELECT action_id FROM PhysicalActionRetired) '
                                          . 'ORDER BY timestamp ASC, priority ASC, '
                                          . 'vss_phys_to_num(physname) ASC, parentdata ASC');
     if (defined $changeset_count && $changeset_count > 0) {
