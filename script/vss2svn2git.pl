@@ -228,6 +228,9 @@ my @system_info_params = (
     { 'gri_git_head' => 'VARCHAR' }, # checkpoints for GetReadImage
     { 'gri_timestamp' => 'INTEGER' },
     { 'gri_next_update' => 'INTEGER' },
+    { 'gri_git_image' => 'TEXT' },
+    { 'gri_destroyed_files' => 'TEXT' },
+    { 'gri_exclude' => 'TEXT' },
     );
 
 &Initialize;
@@ -848,7 +851,8 @@ sub GitReadImage {
     my $tth = $gCfg{dbh}->prepare('SELECT MIN(timestamp) FROM PhysicalAction WHERE timestamp > ?');
 
     my $it_sth = $gCfg{dbh}->prepare('SELECT itemtype FROM PhysItemtype WHERE physname = ?');
-    my $cp_sth = $gCfg{dbh}->prepare('UPDATE SystemInfo SET gri_timestamp = ?, gri_git_head = ?, gri_next_update = ?');
+    my $cp_sth = $gCfg{dbh}->prepare('UPDATE SystemInfo SET gri_timestamp = ?, gri_git_head = ?, gri_next_update = ?, '
+                                     . 'gri_git_image = ?, gri_destroyed_files = ?, gri_exclude = ?');
     my $d_sth = $gCfg{dbh}->prepare('DELETE FROM PhysicalActionSchedule');
     my $r_sth = $gCfg{dbh}->prepare('INSERT INTO PhysicalActionRetired '
                                     . 'SELECT NULL AS retired_id, '
@@ -859,7 +863,13 @@ sub GitReadImage {
         $last_time = $gCfg{gri_timestamp};
         $head_id = $gCfg{gri_git_head};
         $next_update = $gCfg{gri_next_update};
+        %git_image = %{ thaw($gCfg{gri_git_image}) };
+        $destroyed_files = thaw($gCfg{gri_destroyed_files});
+        open my $fh, '>', $gCfg{exclude} or die "error writing $gCfg{exclude}: $!";
+        print $fh $gCfg{gri_exclude};
+        close $fh;
         $repo->logrun('reset' => '--hard', $head_id);
+        # now we need to verify that all
         $gCfg{resume} = 0;
     } else {
         my $username;
@@ -884,7 +894,14 @@ sub GitReadImage {
         $next_update = 0;
 
         # checkpoint now
-        $cp_sth->execute($last_time, $head_id, $next_update);
+        my $giti = nfreeze \%git_image;
+        my $df = nfreeze $destroyed_files;
+
+        open my $fh, '<', $gCfg{exclude} or die "error opening $gCfg{exclude}: $!";
+        my $data = do { local $/; <$fh> };
+        close $fh;
+
+        $cp_sth->execute($last_time, $head_id, $next_update, $giti, $df, $data);
     }
 
     my $dump_cnt = $next_update;
@@ -950,7 +967,14 @@ sub GitReadImage {
                 $head_id = $repo->logrun('rev-parse' => 'HEAD');
 
                 # write the checkpoint
-                $cp_sth->execute($last_time, $head_id, $next_update);
+                my $giti = nfreeze \%git_image;
+                my $df = nfreeze $destroyed_files;
+
+                open my $fh, '<', $gCfg{exclude} or die "error opening $gCfg{exclude}: $!";
+                my $data = do { local $/; <$fh> };
+                close $fh;
+
+                $cp_sth->execute($last_time, $head_id, $next_update, $giti, $df, $data);
             }
 
             # get the next changeset
