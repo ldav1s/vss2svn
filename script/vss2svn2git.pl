@@ -3150,29 +3150,26 @@ sub UpdateGitRepository {
 
                         if (defined $row->{info}) {
                             # this is an unpin
+                            my $pin_name = $row->{physname} . $row->{info}; # The old pin version
+                            $wrote_destroyed = &HandlePin($pin_name, $row->{physname}, $row->{physname},
+                                                          "$warn_msg unpin", undef,
+                                                          $link_file, $git_image, $path, $repo);
                         } else {
                             # this is a pin
                             # There's not a really good way to do this, since
                             # git doesn't suport this, nor do most Linux filesystems.
                             # Find the old version and copy it over...
-                            my $efile = &ExportVssPhysFile($row->{physname}, $row->{version}, \$is_destroyed);
+                            my $pin_name = $row->{physname} . $row->{version};
                             $link_file .= $row->{version};
-                            if (defined $efile && ! -f $link_file) {
-                                if (!copy($efile, $link_file)) {
-                                    warn "$warn_msg export `$efile' path `$link_file' copy $!";
-                                } else {
-                                    $wrote_destroyed = 1 if $is_destroyed;
-                                }
-                            }
+                            $wrote_destroyed = &HandlePin($row->{physname}, $pin_name, $row->{physname},
+                                                          "$warn_msg pin", $row->{version},
+                                                          $link_file, $git_image, $path, $repo);
                         }
 
                         unlink $path if -f $path; # get rid of pinned/unpinned file
                         link $link_file, $path;
                         if (!$wrote_destroyed) {
                             $repo->logrun(add => '--',  $path);
-                        } else {
-                            $destroyed_files->{$row->{physname}} = 1;
-                            &AppendExcludeEntry($path);
                         }
                     }
                     when (ACTION_LABEL) {
@@ -3191,6 +3188,59 @@ sub UpdateGitRepository {
         die "can't finish reading actions";
     }
 
+}
+
+sub HandlePin {
+    my($oldname, $newname, $physname, $msg, $version, $link_file, $git_image, $path, $repo) = @_;
+    my $wrote_destroyed = 0;
+    my $is_destroyed = 0;
+
+    # only need to do this for pin
+    if ($newname ne $physname) {
+        my $efile = &ExportVssPhysFile($physname, $version, \$is_destroyed);
+        if (defined $efile && ! -f $link_file) {
+            if (!copy($efile, $link_file)) {
+                warn "$msg export `$efile' path `$link_file' copy $!";
+            } else {
+                $wrote_destroyed = 1 if $is_destroyed;
+            }
+        } elsif (-f $link_file) {
+            my $pathhash = $repo->logrun('hash-object' => '--', $link_file);
+            $is_destroyed = ($pathhash eq $gCfg{destroyedHash});
+        }
+    }
+
+    if (defined $git_image->{$newname}) {
+        push @{$git_image->{$newname}}, $path;
+    } else {
+        @{$git_image->{$newname}} = ("$path");
+    }
+    # shouldn't need to 'git add', it's a file with the same contents
+
+    # remove bindings for the old one
+    my $path_re = qr/^\Q$path\E$/;
+    @{$git_image->{$oldname}} = grep {!/$path_re/} @{$git_image->{$oldname}};
+    if (scalar @{$git_image->{$oldname}} == 0) {
+        say "$msg deleting git image $oldname" if $gCfg{debug};
+        delete $git_image->{$oldname};
+    }
+
+    # remove the path from excludes, and add it again if needed
+    my $id2;
+    if ($id2 = (defined $destroyed_files->{$oldname})) {
+        if ($destroyed_files->{$oldname} <= 1) {
+            delete $destroyed_files->{$oldname};
+        } else {
+            --$destroyed_files->{$oldname};
+        }
+    }
+    &RewriteExcludes($path);
+    if ($wrote_destroyed || $is_destroyed || $id2) {
+        $destroyed_files->{$newname} = 1;
+        &AppendExcludeEntry($path);
+    }
+
+    return ($wrote_destroyed || $is_destroyed || $id2);
 }
 
 sub invalid_branch_name {
