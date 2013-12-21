@@ -869,7 +869,33 @@ sub GitReadImage {
         print $fh $gCfg{gri_exclude};
         close $fh;
         $repo->logrun('reset' => '--hard', $head_id);
-        # now we need to verify that all
+        # now we need to verify that all hard links are valid
+        # we assume that if there's a difference, what is in
+        # git is what should be in the link file, and hard link again
+        foreach my $dbe (keys %git_image) {
+            if (ref($git_image{$dbe})) {
+                my $link_file = File::Spec->catfile($gCfg{links}, $dbe);
+                my ($link_ino, $path_ino);
+                my @path_inos;
+
+                (undef, $link_ino) = stat($link_file);
+                my @lf_inos =  ($link_ino) x (scalar @{$git_image{$dbe}});
+
+                foreach my $path (@{$git_image{$dbe}}) {
+                    (undef, $path_ino) = stat($path);
+                    push @path_inos, $path_ino;
+                }
+                if (!(@lf_inos ~~ @path_inos)) {
+                    if (!copy($git_image{$dbe}[0], $link_file)) {
+                        warn "GitReadImage: resume path: `$git_image{$dbe}[0]', link `$link_file' copy $!";
+                    }
+                    foreach my $path (@{$git_image{$dbe}}) {
+                        unlink $path;
+                        link $link_file, $path; # add $path as the new link
+                    }
+                }
+            }
+        }
         $gCfg{resume} = 0;
     } else {
         my $username;
