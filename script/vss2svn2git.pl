@@ -231,7 +231,7 @@ my @system_info_params = (
     { 'gri_git_image' => 'TEXT' },
     { 'gri_destroyed_files' => 'TEXT' },
     { 'gri_exclude' => 'TEXT' },
-    { 'rl_next_update' => 'INTEGER' },
+    { 'rl_next_update' => 'INTEGER' }, # checkpoints for ReadLabel
     { 'rl_label_map' => 'TEXT' },
     );
 
@@ -2035,6 +2035,8 @@ EOSQL
 
     $gCfg{dbh}->do($sql);
 
+    # The SystemInfo table stores checkpoint data for the application
+    # for resume.
     my @cfgitems;
     foreach my $param (@system_info_params) {
         my($field, $type);
