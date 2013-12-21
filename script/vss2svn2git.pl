@@ -1817,11 +1817,8 @@ sub SetSystemTask {
 sub ConnectDatabase {
     my $db = $gCfg{sqlitedb};
 
-    if (-e $db && (!$gCfg{resume} ||
-                   ($gCfg{task} eq TASK_INIT))) {
-
-        unlink $db or &ThrowError("Could not delete existing database "
-                                  .$gCfg{sqlitedb});
+    if (-f $db && !$gCfg{resume}) {
+        unlink $db or &ThrowError("Could not delete existing database $gCfg{sqlitedb}");
     }
 
     print "Connecting to database $db\n\n";
@@ -2115,7 +2112,7 @@ sub Initialize {
     $| = 1;
 
     GetOptions(\%gCfg,'vssdir=s','tempdir=s','repo=s','resume','verbose',
-               'debug','timing+','task=s','revtimerange=i','ssphys=s',
+               'debug','timing+','revtimerange=i','ssphys=s',
                'encoding=s','author_info=s');
 
     &GiveHelp("Must specify --vssdir") if !defined($gCfg{vssdir});
@@ -2200,10 +2197,9 @@ sub Initialize {
     # All deleted VSS_PROJECT entries get moved here while deleted
     $gCfg{deleted} = File::Spec->catdir($gCfg{tempdir}, 'deleted');
 
-    $gCfg{task} = $gCfg{task} // TASK_INIT;
-    $gCfg{resume} = 1 if ($gCfg{task} ne TASK_INIT);
+    $gCfg{task} = TASK_INIT;
 
-    if ($gCfg{resume} && !-e $gCfg{sqlitedb}) {
+    if ($gCfg{resume} && ! -f $gCfg{sqlitedb}) {
         warn "WARNING: --resume set but no database exists; "
             . "starting new conversion...";
         $gCfg{resume} = 0;
@@ -2255,30 +2251,6 @@ sub Initialize {
 ###############################################################################
 sub GiveHelp {
     my($msg) = @_;
-    my @states = ();
-    my @states_line = ();
-    my $line = '';
-
-    # columnate the task states
-    foreach my $e (@joblist) {
-        push @states, $e->{task};
-    }
-    foreach my $e (@states) {
-        if (!((length($e) + 1 + length($line)) > 50)) {
-            if (length($line) == 0) {
-                $line = $e;
-            } else {
-                $line .= ' ' . $e;
-            }
-        } else {
-            push @states_line, $line;
-            $line = $e;
-        }
-    }
-    push @states_line, $line;
-    $line = join q{\n}, @states_line;
-    my @output = `printf "$line" | column -c 50 -t | awk '{printf("%24s%-50s\\n", " ", \$0);}'`;
-    $line = join "", @output;
 
     $msg ||= 'Online Help';
 
@@ -2311,8 +2283,6 @@ OPTIONAL PARAMETERS:
                            default is @{[REVTIMERANGE]} seconds.  Must be > 0.
 
     --resume          : Resume a failed or aborted previous run
-    --task <task>     : specify the task to resume; task is one of the following
-$line
     --verbose         : Print more info about the items being processed
     --debug           : Print lots of debugging info.
     --timing          : Show timing information during various steps
@@ -3728,7 +3698,6 @@ vss2svn2git.pl --vssdir F<directory> --author_info F<file> [options]
     --revtimerange <int>       maximum commit time
     --encoding <encoding>      specify VSS encoding
     --resume                   resume failed or aborted run
-    --task <task>              specify task to resume
     --verbose                  print more info during processing
     --debug                    print debugging output
     --timing                   print timing info
@@ -3761,10 +3730,6 @@ Specify the VSS encoding to use.  Defaults to C<windows-1252>.
 =item B<--resume>
 
 Resume a failed or aborted previous run.
-
-=item B<--task>
-
-Specify the task to resume.
 
 =item B<--verbose>
 
