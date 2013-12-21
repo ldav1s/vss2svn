@@ -231,6 +231,8 @@ my @system_info_params = (
     { 'gri_git_image' => 'TEXT' },
     { 'gri_destroyed_files' => 'TEXT' },
     { 'gri_exclude' => 'TEXT' },
+    { 'rl_next_update' => 'INTEGER' },
+    { 'rl_label_map' => 'TEXT' },
     );
 
 &Initialize;
@@ -1117,10 +1119,27 @@ sub ReplayLabels {
         $progress->max_update_rate(1);
     }
 
+    my $cp_sth = $gCfg{dbh}->prepare('UPDATE SystemInfo SET rl_next_update = ?, rl_label_map = ?');
+    if ($gCfg{resume}) {
+        $next_update = $gCfg{rl_next_update};
+        $label_map = thaw($gCfg{rl_label_map});
+        tie %{$label_map}, 'Hash::Case::Preserve';
+        $repo->logrun('reset' => '--hard');
+        $gCfg{resume} = 0;
+    } else {
+        my $lm = nfreeze $label_map;
+        $cp_sth->execute($next_update, $lm);
+    }
+
 
     $gCfg{dbh}->do('DELETE FROM PhysicalActionSchedule'); # for resume
-    $gCfg{dbh}->do('INSERT INTO PhysicalActionSchedule '
-                   . 'SELECT * FROM PhysicalActionLabel ORDER BY schedule_id');
+    $gCfg{dbh}->do('DELETE FROM PhysicalActionChangeset');
+    $gCfg{dbh}->do("INSERT INTO PhysicalActionSchedule "
+                   ."SELECT * "
+                   ."FROM PhysicalActionLabel "
+                   ."WHERE action_id NOT IN "
+                   ."(SELECT action_id FROM PhysicalActionRetired WHERE actiontype = '@{[ACTION_LABEL]}') "
+                   ."ORDER BY schedule_id");
 
     my $last_time = &ResetTimestampFromSchedule();
 
@@ -1235,6 +1254,9 @@ sub ReplayLabels {
             if (defined $username) {
                 &GitCommit($repo, $comment, $username, $last_time);
                 ++$gCfg{commit_id};
+
+                my $lm = nfreeze $label_map;
+                $cp_sth->execute($next_update, $lm);
             }
 
             # get the next changeset
