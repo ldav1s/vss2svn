@@ -1029,9 +1029,6 @@ sub GitReadImage {
         }
     }
 
-    # clean up exclude
-    unlink $gCfg{exclude} if -f $gCfg{exclude};
-
     # document our hard links for 'git pull'
     # Found this at a response to a question on how to handle hard links with git
     # at Stack Overflow <http://stackoverflow.com/questions/3729278/git-and-hard-links>.
@@ -2139,7 +2136,6 @@ sub Initialize {
     $git_image{"@{[VSSDB_ROOT]}"} = $gCfg{repo};
     $gCfg{exclude} = File::Spec->catfile($gCfg{repo}, '.git', 'info', 'exclude');
     $repo_re = qr/^\Q$gCfg{repo}\E./; # XXX not portable
-    unlink $gCfg{exclude} if -f $gCfg{exclude};
 
     if (! -d $gCfg{vssdatadir}) {
         die "The VSS database '$gCfg{vssdir}' "
