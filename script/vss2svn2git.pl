@@ -1272,6 +1272,7 @@ sub ReplayLabels {
 ###############################################################################
 sub Cleanup {
     # cleanup files
+    $gCfg{resume} = 0;
 
     # snap the links
     rmtree($gCfg{links});
