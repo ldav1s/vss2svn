@@ -134,7 +134,6 @@ mechanism_ even though it did do that as well.  I'm using
 
 # TODO
 
-* Fix `--resume`, it's probably broken
 * When a window of commits is scheduled, the _entire_ window is
   scheduled.  Now that the window slides, only the _new_ commits need to
   be scheduled.
