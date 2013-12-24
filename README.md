@@ -132,8 +132,3 @@ mechanism_ when disk space was scarcer and not an _information removal
 mechanism_ even though it did do that as well.  I'm using
 `.git/info/exclude` to filter out files that are destroyed.
 
-# TODO
-
-* When a window of commits is scheduled, the _entire_ window is
-  scheduled.  Now that the window slides, only the _new_ commits need to
-  be scheduled.

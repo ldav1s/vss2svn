@@ -2372,6 +2372,7 @@ sub ResetTimestampFromSchedule {
 sub SchedulePhysicalActions {
     my($timestamp) = @_;
     state $index = 0;
+    my $last_timestamp;
 
     # We must schedule, since timestamp is not fine enough resolution,
     # that some events happen before they should. So the timeline is
@@ -2401,6 +2402,14 @@ sub SchedulePhysicalActions {
         # need to reset time, since there may be two commits in the same timestamp
         $timestamp = &ResetTimestampFromSchedule();
 
+        my $tsth = $gCfg{dbh}->prepare_cached('SELECT timestamp '
+                                              . 'FROM PhysicalActionSchedule '
+                                              . 'WHERE schedule_id = '
+                                              . '(SELECT MAX(schedule_id) FROM PhysicalActionSchedule)');
+
+        $tsth->execute();
+        ($last_timestamp) = $tsth->fetchrow_array();
+        $tsth->finish();
     }
 
     # This slides the window down.
@@ -2408,7 +2417,7 @@ sub SchedulePhysicalActions {
 
     if (defined $should_schedule && $should_schedule > 0) {
         say "timestamp range: $timestamp - " . ($timestamp+$gCfg{revtimerange}) if $gCfg{debug};
-        &CheckAffinity();
+        &CheckAffinity((defined $last_timestamp) ? $last_timestamp : $timestamp);
     }
 
     &GetOneChangeset($timestamp);
@@ -2419,6 +2428,7 @@ sub SchedulePhysicalActions {
 #  CheckAffinity
 ###############################################################################
 sub CheckAffinity {
+    my ($tstamp) = @_;
     my($sth, $rows);
 
     # Attempt to schedule rows where there's multiple rows having the same
@@ -2428,9 +2438,10 @@ sub CheckAffinity {
     # that they should be reordered
     my $ath = $gCfg{dbh}->prepare_cached('SELECT DISTINCT timestamp '
                                          . 'FROM PhysicalActionSchedule '
+                                         . 'WHERE timestamp >= ? '
                                          . 'ORDER BY timestamp',
                                          { dbi_dummy => __FILE__.__LINE__ });
-    $ath->execute();
+    $ath->execute($tstamp);
     my $timestamps = $ath->fetchall_arrayref();
     foreach my $t (@$timestamps) {
         my $timestamp = $t->[0];
