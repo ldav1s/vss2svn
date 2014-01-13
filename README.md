@@ -85,7 +85,7 @@ just followed the suggestion of
  file can be safely removed if you don't want VSS shares anymore.
 
 I'd recommend performing a `git gc` of the repository.  If you don't
-want the VSS shares, I'd also recommend a `git clone` of the
+want the VSS shares, I'd also recommend a `git clone --no-hardlinks` of the
 repository to make sure all the hard links are broken.
 
 ## How it works
